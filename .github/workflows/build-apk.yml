@@ -59,6 +59,8 @@ jobs:
         run: |
           flutter config --enable-windows-desktop
           flutter create --platforms=windows --project-name preventivi_app .
+          # flutter create crea il test di esempio che cerca MyApp; questa app usa una classe diversa.
+          if (Test-Path 'test/widget_test.dart') { Remove-Item 'test/widget_test.dart' -Force }
           New-Item -ItemType Directory -Force windows/runner/resources | Out-Null
           if (Test-Path 'assets/app_icon.ico') {
             Copy-Item 'assets/app_icon.ico' 'windows/runner/resources/app_icon.ico' -Force
