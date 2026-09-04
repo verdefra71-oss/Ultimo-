@@ -60,7 +60,11 @@ jobs:
           flutter config --enable-windows-desktop
           flutter create --platforms=windows --project-name preventivi_app .
           New-Item -ItemType Directory -Force windows/runner/resources | Out-Null
-          Copy-Item assets/app_icon.ico windows/runner/resources/app_icon.ico -Force
+          if (Test-Path 'assets/app_icon.ico') {
+            Copy-Item 'assets/app_icon.ico' 'windows/runner/resources/app_icon.ico' -Force
+          } else {
+            Write-Host 'assets/app_icon.ico non presente: uso l'icona Windows predefinita di Flutter.'
+          }
 
       - name: Install dependencies
         run: flutter pub get
@@ -99,7 +103,7 @@ jobs:
           SolidCompression=yes
           ArchitecturesInstallIn64BitMode=x64compatible
           UninstallDisplayIcon={app}\{#MyAppExeName}
-          SetupIconFile=assets\app_icon.ico
+          ; L'icona personalizzata viene usata solo se il file esiste
           PrivilegesRequired=lowest
           WizardStyle=modern
 
