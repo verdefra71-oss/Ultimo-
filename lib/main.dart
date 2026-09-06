@@ -2008,12 +2008,8 @@ class _ListaPreventiviScreenState extends State<ListaPreventiviScreen> {
                             ),
                           ],
                         ),
-                          ],
-                        ),
-                        ],
                       ),
-                    ),
-                  );
+                    );
                   }),
                 ],
               ),
@@ -2522,19 +2518,6 @@ class _ModificaPreventivoScreenState
   }
 }
 
-Future<void> apriIndirizzoInMaps(String indirizzo) async {
-  final testo = indirizzo.trim();
-  if (testo.isEmpty) return;
-
-  final uri = Uri.parse(
-    'https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(testo)}',
-  );
-
-  if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
-    throw Exception('Impossibile aprire Google Maps');
-  }
-}
-
 class ClientiScreen extends StatefulWidget {
   const ClientiScreen({super.key});
 
@@ -2735,6 +2718,33 @@ class _ClientiScreenState extends State<ClientiScreen> {
     parrocchia.dispose();
   }
 
+  Future<void> _apriMaps(String indirizzo) async {
+    final query = indirizzo.trim();
+    if (query.isEmpty) return;
+
+    final uri = Uri.parse(
+      'https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(query)}',
+    );
+
+    try {
+      final aperto = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+      if (!aperto && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Impossibile aprire Google Maps.')),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Impossibile aprire Google Maps.')),
+        );
+      }
+    }
+  }
+
   Future<void> _elimina(Map<String, dynamic> c) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -2856,18 +2866,6 @@ class _ClientiScreenState extends State<ClientiScreen> {
                         ),
                         subtitle: Text(dettagli),
                         isThreeLine: true,
-                        onTap: () {
-                          final indirizzo = (c['indirizzo'] ?? '').toString().trim();
-                          if (indirizzo.isNotEmpty) {
-                            apriIndirizzoInMaps(indirizzo);
-                          } else {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Questo cliente non ha un indirizzo salvato.'),
-                              ),
-                            );
-                          }
-                        },
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -2875,39 +2873,37 @@ class _ClientiScreenState extends State<ClientiScreen> {
                               IconButton(
                                 tooltip: 'Apri in Google Maps',
                                 icon: const Icon(Icons.map_outlined),
-                                onPressed: () => apriIndirizzoInMaps(
-                                  c['indirizzo'].toString(),
-                                ),
+                                onPressed: () => _apriMaps(c['indirizzo'].toString()),
                               ),
                             PopupMenuButton<String>(
-                          onSelected: (v) {
-                            if (v == 'edit') {
-                              _formCliente(c);
-                            } else {
-                              _elimina(c);
-                            }
-                          },
-                          itemBuilder: (_) => const [
-                            PopupMenuItem(
-                              value: 'edit',
-                              child: ListTile(
-                                leading: Icon(Icons.edit),
-                                title: Text('Modifica'),
-                              ),
-                            ),
-                            PopupMenuItem(
-                              value: 'delete',
-                              child: ListTile(
-                                leading: Icon(Icons.delete_outline),
-                                title: Text('Elimina'),
-                              ),
+                              onSelected: (v) {
+                                if (v == 'edit') {
+                                  _formCliente(c);
+                                } else {
+                                  _elimina(c);
+                                }
+                              },
+                              itemBuilder: (_) => const [
+                                PopupMenuItem(
+                                  value: 'edit',
+                                  child: ListTile(
+                                    leading: Icon(Icons.edit),
+                                    title: Text('Modifica'),
+                                  ),
+                                ),
+                                PopupMenuItem(
+                                  value: 'delete',
+                                  child: ListTile(
+                                    leading: Icon(Icons.delete_outline),
+                                    title: Text('Elimina'),
+                                  ),
+                                ),
+                              ],
                             ),
                           ],
                         ),
-                        ],
                       ),
-                    ),
-                  );
+                    );
                   }),
                 ],
               ),
