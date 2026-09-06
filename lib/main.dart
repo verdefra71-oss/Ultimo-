@@ -1327,8 +1327,36 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
   Future<void> aggiungiAcconto() async {
     final importoController = TextEditingController();
     final dataController = TextEditingController();
+
+    void aggiungi({required BuildContext dialogContext, required bool chiudi}) {
+      final importo = double.tryParse(
+        importoController.text.trim().replaceAll(',', '.'),
+      );
+
+      if (importo == null || importo <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Inserisci un importo acconto valido.')),
+        );
+        return;
+      }
+
+      setState(() {
+        acconti.add({
+          'importo': importo,
+          'data': dataController.text.trim(),
+        });
+      });
+
+      importoController.clear();
+      dataController.clear();
+
+      if (chiudi) {
+        Navigator.pop(dialogContext);
+      }
+    }
+
     try {
-      final ok = await showDialog<bool>(
+      await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('Nuovo acconto'),
@@ -1355,18 +1383,27 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
             ],
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('ANNULLA')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('AGGIUNGI')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('ANNULLA'),
+            ),
+            OutlinedButton(
+              onPressed: () => aggiungi(
+                dialogContext: ctx,
+                chiudi: false,
+              ),
+              child: const Text('AGGIUNGI ALTRO'),
+            ),
+            FilledButton(
+              onPressed: () => aggiungi(
+                dialogContext: ctx,
+                chiudi: true,
+              ),
+              child: const Text('AGGIUNGI E CHIUDI'),
+            ),
           ],
         ),
       );
-      final importo = double.tryParse(importoController.text.trim().replaceAll(',', '.'));
-      if (ok == true && importo != null && importo > 0 && mounted) {
-        setState(() => acconti.add({
-          'importo': importo,
-          'data': dataController.text.trim(),
-        }));
-      }
     } finally {
       importoController.dispose();
       dataController.dispose();
@@ -2275,8 +2312,36 @@ class _ModificaPreventivoScreenState
   Future<void> aggiungiAcconto() async {
     final importoController = TextEditingController();
     final dataController = TextEditingController();
+
+    void aggiungi({required BuildContext dialogContext, required bool chiudi}) {
+      final importo = double.tryParse(
+        importoController.text.trim().replaceAll(',', '.'),
+      );
+
+      if (importo == null || importo <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Inserisci un importo acconto valido.')),
+        );
+        return;
+      }
+
+      setState(() {
+        acconti.add({
+          'importo': importo,
+          'data': dataController.text.trim(),
+        });
+      });
+
+      importoController.clear();
+      dataController.clear();
+
+      if (chiudi) {
+        Navigator.pop(dialogContext);
+      }
+    }
+
     try {
-      final ok = await showDialog<bool>(
+      await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('Nuovo acconto'),
@@ -2286,25 +2351,44 @@ class _ModificaPreventivoScreenState
               TextField(
                 controller: importoController,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: 'Importo acconto (€)'),
+                decoration: const InputDecoration(
+                  labelText: 'Importo acconto (€)',
+                  prefixIcon: Icon(Icons.euro),
+                ),
               ),
               const SizedBox(height: 12),
               TextField(
                 controller: dataController,
-                decoration: const InputDecoration(labelText: 'Data acconto (facoltativa)', hintText: 'gg/mm/aaaa'),
+                decoration: const InputDecoration(
+                  labelText: 'Data acconto (facoltativa)',
+                  hintText: 'gg/mm/aaaa',
+                  prefixIcon: Icon(Icons.calendar_today_outlined),
+                ),
               ),
             ],
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('ANNULLA')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('AGGIUNGI')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('ANNULLA'),
+            ),
+            OutlinedButton(
+              onPressed: () => aggiungi(
+                dialogContext: ctx,
+                chiudi: false,
+              ),
+              child: const Text('AGGIUNGI ALTRO'),
+            ),
+            FilledButton(
+              onPressed: () => aggiungi(
+                dialogContext: ctx,
+                chiudi: true,
+              ),
+              child: const Text('AGGIUNGI E CHIUDI'),
+            ),
           ],
         ),
       );
-      final importo = double.tryParse(importoController.text.trim().replaceAll(',', '.'));
-      if (ok == true && importo != null && importo > 0 && mounted) {
-        setState(() => acconti.add({'importo': importo, 'data': dataController.text.trim()}));
-      }
     } finally {
       importoController.dispose();
       dataController.dispose();
