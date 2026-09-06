@@ -99,7 +99,7 @@ class DatabaseHelper {
 
     return openDatabase(
       p.join(dbPath, fileName),
-      version: 6,
+      version: 7,
       onCreate: (db, version) async {
         await db.execute('''
 CREATE TABLE clienti (
@@ -137,7 +137,7 @@ CREATE TABLE preventivi (
 ''');
 
         await db.execute('''
-CREATE TABLE rate (
+CREATE TABLE acconti (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   preventivo_id INTEGER NOT NULL,
   cliente TEXT NOT NULL,
@@ -176,6 +176,27 @@ CREATE TABLE rate (
             "ALTER TABLE preventivi ADD COLUMN accettato INTEGER NOT NULL DEFAULT 0",
           );
         }
+        if (oldVersion < 7) {
+          // Migrazione: da vecchia tabella "rate" a "acconti".
+          await db.execute('''
+CREATE TABLE IF NOT EXISTS acconti (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  preventivo_id INTEGER NOT NULL,
+  cliente TEXT NOT NULL,
+  importo REAL NOT NULL,
+  data_scadenza TEXT NOT NULL,
+  pagata INTEGER NOT NULL DEFAULT 0
+)
+''');
+          try {
+            await db.execute('''
+INSERT OR IGNORE INTO acconti
+  (id, preventivo_id, cliente, importo, data_scadenza, pagata)
+SELECT id, preventivo_id, cliente, importo, data_scadenza, pagata
+FROM rate
+''');
+          } catch (_) {}
+        }
       },
     );
   }
@@ -192,8 +213,8 @@ CREATE TABLE rate (
     return (await database).query('prodotti', orderBy: 'nome COLLATE NOCASE');
   }
 
-  Future<List<Map<String, dynamic>>> getRate() async {
-    return (await database).query('rate', orderBy: 'data_scadenza');
+  Future<List<Map<String, dynamic>>> getAcconti() async {
+    return (await database).query('acconti', orderBy: 'data_scadenza');
   }
 
   Future<int> insertProdotto({
@@ -304,7 +325,7 @@ CREATE TABLE rate (
     required String numero,
     required String cliente,
     required double totale,
-    required int numeroRate,
+    required int numeroAcconti,
     required List<Map<String, dynamic>> articoli,
     required double ivaPercent,
     required bool accettato,
@@ -314,7 +335,7 @@ CREATE TABLE rate (
       'data': DateTime.now().toIso8601String(),
       'cliente': cliente,
       'totale': totale,
-      'numero_rate': numeroRate,
+      'numero_rate': numeroAcconti,
       'articoli': jsonEncode(articoli),
       'iva_percent': ivaPercent,
       'accettato': accettato ? 1 : 0,
@@ -327,7 +348,7 @@ CREATE TABLE rate (
     required int id,
     required String cliente,
     required double totale,
-    required int numeroRate,
+    required int numeroAcconti,
     required List<Map<String, dynamic>> articoli,
     required double ivaPercent,
     required bool accettato,
@@ -337,7 +358,7 @@ CREATE TABLE rate (
       {
         'cliente': cliente,
         'totale': totale,
-        'numero_rate': numeroRate,
+        'numero_rate': numeroAcconti,
         'articoli': jsonEncode(articoli),
         'iva_percent': ivaPercent,
         'accettato': accettato ? 1 : 0,
@@ -349,13 +370,13 @@ CREATE TABLE rate (
     return result;
   }
 
-  Future<void> insertRata({
+  Future<void> insertAcconto({
     required int preventivoId,
     required String cliente,
     required double importo,
     required DateTime dataScadenza,
   }) async {
-    await (await database).insert('rate', {
+    await (await database).insert('acconti', {
       'preventivo_id': preventivoId,
       'cliente': cliente,
       'importo': importo,
@@ -376,7 +397,7 @@ CREATE TABLE rate (
       'clienti': await db.query('clienti'),
       'prodotti': await db.query('prodotti'),
       'preventivi': await db.query('preventivi'),
-      'rate': await db.query('rate'),
+      'acconti': await db.query('acconti'),
     };
   }
 
@@ -414,19 +435,20 @@ CREATE TABLE rate (
     final preventivi = List<Map<String, dynamic>>.from(
       (decoded['preventivi'] as List? ?? []).map((e) => Map<String, dynamic>.from(e)),
     );
-    final rate = List<Map<String, dynamic>>.from(
-      (decoded['rate'] as List? ?? []).map((e) => Map<String, dynamic>.from(e)),
+    final acconti = List<Map<String, dynamic>>.from(
+      ((decoded['acconti'] ?? decoded['rate'] ?? []) as List)
+          .map((e) => Map<String, dynamic>.from(e)),
     );
     final db = await database;
     await db.transaction((txn) async {
-      await txn.delete('rate');
+      await txn.delete('acconti');
       await txn.delete('preventivi');
       await txn.delete('prodotti');
       await txn.delete('clienti');
       for (final row in clienti) await txn.insert('clienti', row);
       for (final row in prodotti) await txn.insert('prodotti', row);
       for (final row in preventivi) await txn.insert('preventivi', row);
-      for (final row in rate) await txn.insert('rate', row);
+      for (final row in acconti) await txn.insert('acconti', row);
     });
     await createAutomaticBackup();
   }
@@ -483,7 +505,7 @@ class NotificationService {
     await richiediPermessi();
   }
 
-  Future<bool> programmaNotificaRata({
+  Future<bool> programmaNotificaAcconto({
     required int id,
     required String cliente,
     required double importo,
@@ -496,14 +518,14 @@ class NotificationService {
     try {
       await _notifications.zonedSchedule(
         id,
-        'Rata in scadenza',
-        'Oggi scade la rata di €${importo.toStringAsFixed(2)} per $cliente.',
+        'Acconto in scadenza',
+        'Oggi scade l'acconto di €${importo.toStringAsFixed(2)} per $cliente.',
         when,
         const NotificationDetails(
           android: AndroidNotificationDetails(
-            'rate_channel',
-            'Notifiche Rate',
-            channelDescription: 'Avvisi per le scadenze dei pagamenti rateali',
+            'acconti_channel',
+            'Notifiche Acconti',
+            channelDescription: 'Avvisi per le scadenze dei pagamenti acconti',
             importance: Importance.max,
             priority: Priority.high,
           ),
@@ -518,15 +540,15 @@ class NotificationService {
       try {
         await _notifications.zonedSchedule(
           id,
-          'Rata in scadenza',
-          'Oggi scade la rata di €${importo.toStringAsFixed(2)} per $cliente.',
+          'Acconto in scadenza',
+          'Oggi scade l'acconto di €${importo.toStringAsFixed(2)} per $cliente.',
           when,
           const NotificationDetails(
             android: AndroidNotificationDetails(
-              'rate_channel',
-              'Notifiche Rate',
+              'acconti_channel',
+              'Notifiche Acconti',
               channelDescription:
-                  'Avvisi per le scadenze dei pagamenti rateali',
+                  'Avvisi per le scadenze dei pagamenti acconti',
               importance: Importance.max,
               priority: Priority.high,
             ),
@@ -548,7 +570,7 @@ class PdfGenerator {
     required String numero,
     required String cliente,
     required List<Map<String, dynamic>> articoli,
-    required int numeroRate,
+    required int numeroAcconti,
     required double ivaPercent,
     required bool accettato,
   }) async {
@@ -591,7 +613,7 @@ class PdfGenerator {
     );
     final iva = imponibile * ivaPercent / 100;
     final totale = imponibile + iva;
-    final quota = numeroRate > 0 ? totale / numeroRate : totale;
+    final quota = numeroAcconti > 0 ? totale / numeroAcconti : totale;
     final data = DateFormat('dd/MM/yyyy').format(DateTime.now());
 
     final gold = PdfColor.fromHex('#B8860B');
@@ -763,7 +785,7 @@ class PdfGenerator {
               ],
             ),
           ),
-          if (numeroRate > 1) ...[
+          if (numeroAcconti > 1) ...[
             pw.SizedBox(height: 18),
             pw.Container(
               width: double.infinity,
@@ -773,7 +795,7 @@ class PdfGenerator {
                 borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
               ),
               child: pw.Text(
-                '$numeroRate rate mensili da € ${quota.toStringAsFixed(2)} ciascuna.',
+                '$numeroAcconti acconti mensili da € ${quota.toStringAsFixed(2)} ciascuna.',
               ),
             ),
           ],
@@ -806,7 +828,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int preventivi = 0;
   int clienti = 0;
   int prodotti = 0;
-  int rate = 0;
+  int acconti = 0;
   bool loading = true;
 
   static const _gold = Color(0xFFD4AF37);
@@ -825,14 +847,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
       db.getPreventivi(),
       db.getClienti(),
       db.getProdotti(),
-      db.getRate(),
+      db.getAcconti(),
     ]);
     if (!mounted) return;
     setState(() {
       preventivi = results[0].length;
       clienti = results[1].length;
       prodotti = results[2].length;
-      rate = results[3].length;
+      acconti = results[3].length;
       loading = false;
     });
   }
@@ -942,7 +964,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 _statCard(Icons.receipt_long_rounded, 'Preventivi', preventivi),
                 _statCard(Icons.people_alt_rounded, 'Clienti', clienti),
                 _statCard(Icons.inventory_2_rounded, 'Prodotti', prodotti),
-                _statCard(Icons.payments_rounded, 'Rate', rate),
+                _statCard(Icons.payments_rounded, 'Acconti', acconti),
               ],
             ),
             const SizedBox(height: 16),
@@ -979,8 +1001,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 _actionCard(
                   Icons.event_available_rounded,
-                  'Rate e scadenze',
-                  () => apri(const RateScreen()),
+                  'Acconti e scadenze',
+                  () => apri(const AccontiScreen()),
                 ),
                 _actionCard(
                   Icons.notifications_active_rounded,
@@ -1250,7 +1272,7 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
 
   final List<Map<String, dynamic>> articoli = [];
 
-  int numeroRate = 1;
+  int numeroAcconti = 1;
   double ivaPercent = 22;
   bool accettato = false;
   bool busy = false;
@@ -1346,7 +1368,7 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
         numero: numero,
         cliente: cliente,
         totale: totale,
-        numeroRate: numeroRate,
+        numeroAcconti: numeroAcconti,
         articoli: articoli,
         ivaPercent: ivaPercent,
         accettato: accettato,
@@ -1362,11 +1384,11 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
         await db.insertCliente(nome: cliente);
       }
 
-      if (numeroRate > 1) {
-        final base = totale / numeroRate;
+      if (numeroAcconti > 1) {
+        final base = totale / numeroAcconti;
         double somma = 0;
 
-        for (int i = 1; i <= numeroRate; i++) {
+        for (int i = 1; i <= numeroAcconti; i++) {
           final data = DateTime(
             DateTime.now().year,
             DateTime.now().month + i,
@@ -1374,20 +1396,20 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
             9,
           );
 
-          final importo = i == numeroRate
+          final importo = i == numeroAcconti
               ? double.parse((totale - somma).toStringAsFixed(2))
               : double.parse(base.toStringAsFixed(2));
 
           somma += importo;
 
-          await db.insertRata(
+          await db.insertAcconto(
             preventivoId: id,
             cliente: cliente,
             importo: importo,
             dataScadenza: data,
           );
 
-          await NotificationService().programmaNotificaRata(
+          await NotificationService().programmaNotificaAcconto(
             id: id * 100 + i,
             cliente: cliente,
             importo: importo,
@@ -1400,7 +1422,7 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
         numero: numero,
         cliente: cliente,
         articoli: articoli,
-        numeroRate: numeroRate,
+        numeroAcconti: numeroAcconti,
         ivaPercent: ivaPercent,
         accettato: accettato,
       );
@@ -1622,37 +1644,37 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 const Text(
-                  'Numero rate mensili',
+                  'Numero acconti mensili',
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
                 DropdownButton<int>(
-                  value: numeroRate,
+                  value: numeroAcconti,
                   items: List.generate(
                     12,
                     (i) => DropdownMenuItem(
                       value: i + 1,
                       child: Text(
-                        '${i + 1} ${i == 0 ? 'rata' : 'rate'}',
+                        '${i + 1} ${i == 0 ? 'acconto' : 'acconti'}',
                       ),
                     ),
                   ),
                   onChanged: (v) {
                     if (v != null) {
-                      setState(() => numeroRate = v);
+                      setState(() => numeroAcconti = v);
                     }
                   },
                 ),
               ],
             ),
-            if (numeroRate > 1)
+            if (numeroAcconti > 1)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
-                  'Rata indicativa: € '
-                  '${(totale / numeroRate).toStringAsFixed(2)}',
+                  'Acconto indicativo: € '
+                  '${(totale / numeroAcconti).toStringAsFixed(2)}',
                   style: TextStyle(
                     color: Theme.of(context).colorScheme.primary,
                     fontWeight: FontWeight.w600,
@@ -1691,7 +1713,7 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
                 label: Text(
                   busy
                       ? 'SALVATAGGIO...'
-                      : 'GENERA PDF E PROGRAMMA RATE',
+                      : 'GENERA PDF E PROGRAMMA ACCONTI',
                 ),
               ),
             ),
@@ -1766,7 +1788,7 @@ class _ListaPreventiviScreenState extends State<ListaPreventiviScreen> {
       final db = await DatabaseHelper.instance.database;
 
       await db.delete(
-        'rate',
+        'acconti',
         where: 'preventivo_id = ?',
         whereArgs: [preventivo['id']],
       );
@@ -1836,9 +1858,9 @@ class _ListaPreventiviScreenState extends State<ListaPreventiviScreen> {
               ),
               _detailRow(
                 Icons.event_repeat,
-                'Rate',
+                'Acconti',
                 '${x['numero_rate']} '
-                '${x['numero_rate'] == 1 ? 'rata' : 'rate'}',
+                '${x['numero_rate'] == 1 ? 'acconto' : 'acconti'}',
               ),
               _detailRow(
                 Icons.check_circle_outline,
@@ -1888,7 +1910,7 @@ class _ListaPreventiviScreenState extends State<ListaPreventiviScreen> {
                       numero: x['numero'],
                       cliente: x['cliente'],
                       articoli: _articoliDaPreventivo(x),
-                      numeroRate: x['numero_rate'],
+                      numeroAcconti: x['numero_rate'],
                       ivaPercent: (x['iva_percent'] as num?)?.toDouble() ?? 0,
                       accettato: (x['accettato'] as num?)?.toInt() == 1,
                     );
@@ -2054,7 +2076,7 @@ class _ListaPreventiviScreenState extends State<ListaPreventiviScreen> {
                             '${x['cliente']}\n'
                             '${DateFormat('dd/MM/yyyy').format(data)} • '
                             '${x['numero_rate']} '
-                            '${x['numero_rate'] == 1 ? 'rata' : 'rate'}',
+                            '${x['numero_rate'] == 1 ? 'acconto' : 'acconti'}',
                           ),
                         ),
                         isThreeLine: true,
@@ -2108,7 +2130,7 @@ class _ModificaPreventivoScreenState
   final quantitaController = TextEditingController(text: '1');
 
   late List<Map<String, dynamic>> articoli;
-  late int numeroRate;
+  late int numeroAcconti;
   late double ivaPercent;
   late bool accettato;
 
@@ -2154,7 +2176,7 @@ class _ModificaPreventivoScreenState
       text: widget.preventivo['cliente'],
     );
 
-    numeroRate =
+    numeroAcconti =
         (widget.preventivo['numero_rate'] as num).toInt();
     ivaPercent =
         (widget.preventivo['iva_percent'] as num?)?.toDouble() ?? 0;
@@ -2236,7 +2258,7 @@ class _ModificaPreventivoScreenState
         id: preventivoId,
         cliente: cliente,
         totale: totale,
-        numeroRate: numeroRate,
+        numeroAcconti: numeroAcconti,
         articoli: articoli,
         ivaPercent: ivaPercent,
         accettato: accettato,
@@ -2245,16 +2267,16 @@ class _ModificaPreventivoScreenState
       final database = await db.database;
 
       await database.delete(
-        'rate',
+        'acconti',
         where: 'preventivo_id = ?',
         whereArgs: [preventivoId],
       );
 
-      if (numeroRate > 1) {
-        final base = totale / numeroRate;
+      if (numeroAcconti > 1) {
+        final base = totale / numeroAcconti;
         double somma = 0;
 
-        for (int i = 1; i <= numeroRate; i++) {
+        for (int i = 1; i <= numeroAcconti; i++) {
           final data = DateTime(
             DateTime.now().year,
             DateTime.now().month + i,
@@ -2262,20 +2284,20 @@ class _ModificaPreventivoScreenState
             9,
           );
 
-          final importo = i == numeroRate
+          final importo = i == numeroAcconti
               ? double.parse((totale - somma).toStringAsFixed(2))
               : double.parse(base.toStringAsFixed(2));
 
           somma += importo;
 
-          await db.insertRata(
+          await db.insertAcconto(
             preventivoId: preventivoId,
             cliente: cliente,
             importo: importo,
             dataScadenza: data,
           );
 
-          await NotificationService().programmaNotificaRata(
+          await NotificationService().programmaNotificaAcconto(
             id: preventivoId * 100 + i,
             cliente: cliente,
             importo: importo,
@@ -2288,7 +2310,7 @@ class _ModificaPreventivoScreenState
         numero: widget.preventivo['numero'],
         cliente: cliente,
         articoli: articoli,
-        numeroRate: numeroRate,
+        numeroAcconti: numeroAcconti,
         ivaPercent: ivaPercent,
         accettato: accettato,
       );
@@ -2506,37 +2528,37 @@ class _ModificaPreventivoScreenState
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 const Text(
-                  'Numero rate mensili',
+                  'Numero acconti mensili',
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
                 DropdownButton<int>(
-                  value: numeroRate,
+                  value: numeroAcconti,
                   items: List.generate(
                     12,
                     (i) => DropdownMenuItem(
                       value: i + 1,
                       child: Text(
-                        '${i + 1} ${i == 0 ? 'rata' : 'rate'}',
+                        '${i + 1} ${i == 0 ? 'acconto' : 'acconti'}',
                       ),
                     ),
                   ),
                   onChanged: (v) {
                     if (v != null) {
-                      setState(() => numeroRate = v);
+                      setState(() => numeroAcconti = v);
                     }
                   },
                 ),
               ],
             ),
-            if (numeroRate > 1)
+            if (numeroAcconti > 1)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
-                  'Rata indicativa: € '
-                  '${(totale / numeroRate).toStringAsFixed(2)}',
+                  'Acconto indicativo: € '
+                  '${(totale / numeroAcconti).toStringAsFixed(2)}',
                   style: TextStyle(
                     color: Theme.of(context).colorScheme.primary,
                     fontWeight: FontWeight.w600,
@@ -3359,7 +3381,7 @@ class _BackupScreenState extends State<BackupScreen> {
         builder: (context) => AlertDialog(
           title: const Text('Importa backup'),
           content: const Text(
-            'L’importazione sostituirà i dati attuali di clienti, servizi, preventivi e rate. Continuare?',
+            'L’importazione sostituirà i dati attuali di clienti, servizi, preventivi e acconti. Continuare?',
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('ANNULLA')),
@@ -3435,7 +3457,7 @@ class _BackupScreenState extends State<BackupScreen> {
           ],
           const SizedBox(height: 18),
           const Text(
-            'Il backup contiene clienti, prodotti/servizi, preventivi e rate. L’importazione sostituisce i dati presenti sul dispositivo.',
+            'Il backup contiene clienti, prodotti/servizi, preventivi e acconti. L’importazione sostituisce i dati presenti sul dispositivo.',
             style: TextStyle(fontSize: 13),
           ),
         ],
@@ -3508,8 +3530,8 @@ class _NotificheScreenState extends State<NotificheScreen> {
             const SizedBox(height: 12),
             Text(
               abilitate == true
-                  ? 'Le scadenze delle rate possono essere segnalate automaticamente.'
-                  : 'Per ricevere gli avvisi delle rate, abilita le notifiche per questa app nelle impostazioni di Android.',
+                  ? 'Le scadenze degli acconti possono essere segnalate automaticamente.'
+                  : 'Per ricevere gli avvisi degli acconti, abilita le notifiche per questa app nelle impostazioni di Android.',
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
@@ -3531,17 +3553,17 @@ class _NotificheScreenState extends State<NotificheScreen> {
   }
 }
 
-class RateScreen extends StatelessWidget {
-  const RateScreen({super.key});
+class AccontiScreen extends StatelessWidget {
+  const AccontiScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Rate e scadenze'),
+        title: const Text('Acconti e scadenze'),
       ),
       body: FutureBuilder<List<Map<String, dynamic>>>(
-        future: DatabaseHelper.instance.getRate(),
+        future: DatabaseHelper.instance.getAcconti(),
         builder: (context, snapshot) {
           if (!snapshot.hasData) {
             return const Center(
@@ -3549,22 +3571,22 @@ class RateScreen extends StatelessWidget {
             );
           }
 
-          final rate = snapshot.data!;
+          final acconti = snapshot.data!;
 
-          if (rate.isEmpty) {
+          if (acconti.isEmpty) {
             return const _EmptyState(
               icon: Icons.payments_outlined,
-              text: 'Nessuna rata programmata.',
+              text: 'Nessun acconto programmato.',
             );
           }
 
           return ListView.separated(
             padding: const EdgeInsets.all(12),
-            itemCount: rate.length,
+            itemCount: acconti.length,
             separatorBuilder: (_, __) =>
                 const SizedBox(height: 8),
             itemBuilder: (context, index) {
-              final x = rate[index];
+              final x = acconti[index];
 
               final data = DateTime.parse(
                 x['data_scadenza'],
