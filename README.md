@@ -1,6 +1,6 @@
 # Preventivi
 
-App Flutter per gestione di clienti, prodotti/servizi, preventivi, IVA, rate e notifiche.
+App Flutter per gestione di clienti, prodotti/servizi, preventivi, IVA, acconti e notifiche.
 
 ## Build APK su GitHub Actions
 
