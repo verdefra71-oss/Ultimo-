@@ -2002,10 +2002,6 @@ class _ListaPreventiviScreenState extends State<ListaPreventiviScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (accontoController.text.trim().isEmpty && totale > 0) {
-      accontoController.text =
-          (totale / (numeroAcconti > 0 ? numeroAcconti : 1)).toStringAsFixed(2);
-    }
     final q = _search.text.trim().toLowerCase();
 
     final filtrati = preventivi.where((x) {
