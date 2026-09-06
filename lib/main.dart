@@ -519,7 +519,7 @@ class NotificationService {
       await _notifications.zonedSchedule(
         id,
         'Acconto in scadenza',
-        'Oggi scade l'acconto di €${importo.toStringAsFixed(2)} per $cliente.',
+        "Oggi scade l'acconto di €${importo.toStringAsFixed(2)} per $cliente.",
         when,
         const NotificationDetails(
           android: AndroidNotificationDetails(
@@ -530,7 +530,7 @@ class NotificationService {
             priority: Priority.high,
           ),
         ),
-        androidAllowWhileIdle: true,
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
         uiLocalNotificationDateInterpretation:
             UILocalNotificationDateInterpretation.absoluteTime,
       );
@@ -541,7 +541,7 @@ class NotificationService {
         await _notifications.zonedSchedule(
           id,
           'Acconto in scadenza',
-          'Oggi scade l'acconto di €${importo.toStringAsFixed(2)} per $cliente.',
+          "Oggi scade l'acconto di €${importo.toStringAsFixed(2)} per $cliente.",
           when,
           const NotificationDetails(
             android: AndroidNotificationDetails(
@@ -553,7 +553,7 @@ class NotificationService {
               priority: Priority.high,
             ),
           ),
-          androidAllowWhileIdle: false,
+          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
           uiLocalNotificationDateInterpretation:
               UILocalNotificationDateInterpretation.absoluteTime,
         );
