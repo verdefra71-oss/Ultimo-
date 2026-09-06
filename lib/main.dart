@@ -530,7 +530,7 @@ class NotificationService {
             priority: Priority.high,
           ),
         ),
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        androidAllowWhileIdle: true,
         uiLocalNotificationDateInterpretation:
             UILocalNotificationDateInterpretation.absoluteTime,
       );
@@ -553,7 +553,7 @@ class NotificationService {
               priority: Priority.high,
             ),
           ),
-          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+          androidAllowWhileIdle: false,
           uiLocalNotificationDateInterpretation:
               UILocalNotificationDateInterpretation.absoluteTime,
         );
