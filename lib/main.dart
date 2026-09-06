@@ -344,10 +344,11 @@ CREATE TABLE rate (
       {
         'cliente': cliente,
         'totale': totale,
-        'numero_rate': 1,
+        'numero_rate': acconti.length,
         'articoli': jsonEncode(articoli),
         'iva_percent': ivaPercent,
         'accettato': accettato ? 1 : 0,
+        'acconti': jsonEncode(acconti),
       },
       where: 'id = ?',
       whereArgs: [id],
@@ -2165,9 +2166,27 @@ class _ListaPreventiviScreenState extends State<ListaPreventiviScreen> {
                               ),
                             ),
                             const SizedBox(height: 4),
-                            const Icon(
-                              Icons.chevron_right,
-                              size: 20,
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  tooltip: 'Modifica preventivo',
+                                  visualDensity: VisualDensity.compact,
+                                  padding: EdgeInsets.zero,
+                                  onPressed: () {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => ModificaPreventivoScreen(
+                                          preventivo: x,
+                                        ),
+                                      ),
+                                    ).then((_) => _carica());
+                                  },
+                                  icon: const Icon(Icons.edit_outlined, size: 22),
+                                ),
+                                const Icon(Icons.chevron_right, size: 20),
+                              ],
                             ),
                           ],
                         ),
@@ -2317,7 +2336,8 @@ class _ModificaPreventivoScreenState
       articoli = (raw as List).map((e) {
         return {
           'nome': e['nome'].toString(),
-          'prezzo': (e['prezzo'] as num).toDouble(),
+          'prezzo': (e['prezzo'] as num?)?.toDouble() ?? 0,
+          'quantita': (e['quantita'] as num?)?.toDouble() ?? 1,
         };
       }).toList();
     } catch (_) {
@@ -2381,7 +2401,7 @@ class _ModificaPreventivoScreenState
       final preventivoId =
           (widget.preventivo['id'] as num).toInt();
 
-      await db.updatePreventivo(
+      final updated = await db.updatePreventivo(
         id: preventivoId,
         cliente: cliente,
         totale: totale,
@@ -2390,6 +2410,10 @@ class _ModificaPreventivoScreenState
         accettato: accettato,
         acconti: acconti,
       );
+
+      if (updated == 0) {
+        throw Exception('Preventivo non trovato nel database.');
+      }
 
       await PdfGenerator.generaECondividiPreventivo(
         numero: widget.preventivo['numero'],
