@@ -785,7 +785,7 @@ class PdfGenerator {
               ],
             ),
           ),
-          if (numeroAcconti > 1) ...[
+          if (numeroAcconti > 0) ...[
             pw.SizedBox(height: 18),
             pw.Container(
               width: double.infinity,
@@ -795,7 +795,9 @@ class PdfGenerator {
                 borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
               ),
               child: pw.Text(
-                '$numeroAcconti acconti mensili da € ${quota.toStringAsFixed(2)} ciascuna.',
+                numeroAcconti == 1
+                    ? 'Acconto: € ${quota.toStringAsFixed(2)}.'
+                    : '$numeroAcconti acconti mensili da € ${quota.toStringAsFixed(2)} ciascuna.',
               ),
             ),
           ],
@@ -1269,6 +1271,7 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
   final prodottoController = TextEditingController();
   final prezzoController = TextEditingController();
   final quantitaController = TextEditingController(text: '1');
+  final accontoController = TextEditingController();
 
   final List<Map<String, dynamic>> articoli = [];
 
@@ -1315,6 +1318,7 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
     prodottoController.dispose();
     prezzoController.dispose();
     quantitaController.dispose();
+    accontoController.dispose();
     super.dispose();
   }
 
@@ -1384,38 +1388,47 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
         await db.insertCliente(nome: cliente);
       }
 
-      if (numeroAcconti > 1) {
-        final base = totale / numeroAcconti;
-        double somma = 0;
+      final valoreAcconto = double.tryParse(
+        accontoController.text.trim().replaceAll(',', '.'),
+      );
 
-        for (int i = 1; i <= numeroAcconti; i++) {
-          final data = DateTime(
-            DateTime.now().year,
-            DateTime.now().month + i,
-            DateTime.now().day,
-            9,
-          );
+      if (valoreAcconto == null || valoreAcconto <= 0) {
+        throw Exception('Inserisci un valore valido per l\'acconto.');
+      }
+      if (numeroAcconti > 1 && valoreAcconto * (numeroAcconti - 1) > totale) {
+        throw Exception(
+          'Il valore degli acconti è troppo alto rispetto al totale del preventivo.',
+        );
+      }
 
-          final importo = i == numeroAcconti
-              ? double.parse((totale - somma).toStringAsFixed(2))
-              : double.parse(base.toStringAsFixed(2));
+      double somma = 0;
+      for (int i = 1; i <= numeroAcconti; i++) {
+        final data = DateTime(
+          DateTime.now().year,
+          DateTime.now().month + i,
+          DateTime.now().day,
+          9,
+        );
 
-          somma += importo;
+        final importo = i == numeroAcconti && numeroAcconti > 1
+            ? double.parse((totale - somma).toStringAsFixed(2))
+            : double.parse(valoreAcconto.toStringAsFixed(2));
 
-          await db.insertAcconto(
-            preventivoId: id,
-            cliente: cliente,
-            importo: importo,
-            dataScadenza: data,
-          );
+        somma += importo;
 
-          await NotificationService().programmaNotificaAcconto(
-            id: id * 100 + i,
-            cliente: cliente,
-            importo: importo,
-            dataScadenza: data,
-          );
-        }
+        await db.insertAcconto(
+          preventivoId: id,
+          cliente: cliente,
+          importo: importo,
+          dataScadenza: data,
+        );
+
+        await NotificationService().programmaNotificaAcconto(
+          id: id * 100 + i,
+          cliente: cliente,
+          importo: importo,
+          dataScadenza: data,
+        );
       }
 
       await PdfGenerator.generaECondividiPreventivo(
@@ -1669,18 +1682,34 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
                 ),
               ],
             ),
-            if (numeroAcconti > 1)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  'Acconto indicativo: € '
-                  '${(totale / numeroAcconti).toStringAsFixed(2)}',
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.primary,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+            const SizedBox(height: 4),
+            TextFormField(
+              controller: accontoController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'Valore dell\'acconto',
+                hintText: 'Inserisci l\'importo',
+                prefixText: '€ ',
+                border: OutlineInputBorder(),
               ),
+              onTap: () {
+                if (accontoController.text.trim().isEmpty) {
+                  accontoController.text =
+                      (totale / (numeroAcconti > 0 ? numeroAcconti : 1))
+                          .toStringAsFixed(2);
+                }
+              },
+            ),
+            const SizedBox(height: 6),
+            Text(
+              numeroAcconti > 1
+                  ? 'Inserisci l\'importo di ogni acconto. L\'ultimo verrà calcolato automaticamente sul residuo.'
+                  : 'Inserisci l\'importo dell\'acconto.',
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
             const SizedBox(height: 12),
             Card(
               child: CheckboxListTile(
@@ -1973,6 +2002,10 @@ class _ListaPreventiviScreenState extends State<ListaPreventiviScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (accontoController.text.trim().isEmpty && totale > 0) {
+      accontoController.text =
+          (totale / (numeroAcconti > 0 ? numeroAcconti : 1)).toStringAsFixed(2);
+    }
     final q = _search.text.trim().toLowerCase();
 
     final filtrati = preventivi.where((x) {
@@ -2128,6 +2161,7 @@ class _ModificaPreventivoScreenState
   final prodottoController = TextEditingController();
   final prezzoController = TextEditingController();
   final quantitaController = TextEditingController(text: '1');
+  late final TextEditingController accontoController;
 
   late List<Map<String, dynamic>> articoli;
   late int numeroAcconti;
@@ -2181,6 +2215,11 @@ class _ModificaPreventivoScreenState
     ivaPercent =
         (widget.preventivo['iva_percent'] as num?)?.toDouble() ?? 0;
     accettato = (widget.preventivo['accettato'] as num?)?.toInt() == 1;
+    accontoController = TextEditingController(
+      text: (((widget.preventivo['totale'] as num?)?.toDouble() ?? 0) /
+              (numeroAcconti > 0 ? numeroAcconti : 1))
+          .toStringAsFixed(2),
+    );
 
     try {
       final raw = jsonDecode(
@@ -2272,38 +2311,47 @@ class _ModificaPreventivoScreenState
         whereArgs: [preventivoId],
       );
 
-      if (numeroAcconti > 1) {
-        final base = totale / numeroAcconti;
-        double somma = 0;
+      final valoreAcconto = double.tryParse(
+        accontoController.text.trim().replaceAll(',', '.'),
+      );
 
-        for (int i = 1; i <= numeroAcconti; i++) {
-          final data = DateTime(
-            DateTime.now().year,
-            DateTime.now().month + i,
-            DateTime.now().day,
-            9,
-          );
+      if (valoreAcconto == null || valoreAcconto <= 0) {
+        throw Exception('Inserisci un valore valido per l\'acconto.');
+      }
+      if (numeroAcconti > 1 && valoreAcconto * (numeroAcconti - 1) > totale) {
+        throw Exception(
+          'Il valore degli acconti è troppo alto rispetto al totale del preventivo.',
+        );
+      }
 
-          final importo = i == numeroAcconti
-              ? double.parse((totale - somma).toStringAsFixed(2))
-              : double.parse(base.toStringAsFixed(2));
+      double somma = 0;
+      for (int i = 1; i <= numeroAcconti; i++) {
+        final data = DateTime(
+          DateTime.now().year,
+          DateTime.now().month + i,
+          DateTime.now().day,
+          9,
+        );
 
-          somma += importo;
+        final importo = i == numeroAcconti && numeroAcconti > 1
+            ? double.parse((totale - somma).toStringAsFixed(2))
+            : double.parse(valoreAcconto.toStringAsFixed(2));
 
-          await db.insertAcconto(
-            preventivoId: preventivoId,
-            cliente: cliente,
-            importo: importo,
-            dataScadenza: data,
-          );
+        somma += importo;
 
-          await NotificationService().programmaNotificaAcconto(
-            id: preventivoId * 100 + i,
-            cliente: cliente,
-            importo: importo,
-            dataScadenza: data,
-          );
-        }
+        await db.insertAcconto(
+          preventivoId: preventivoId,
+          cliente: cliente,
+          importo: importo,
+          dataScadenza: data,
+        );
+
+        await NotificationService().programmaNotificaAcconto(
+          id: preventivoId * 100 + i,
+          cliente: cliente,
+          importo: importo,
+          dataScadenza: data,
+        );
       }
 
       await PdfGenerator.generaECondividiPreventivo(
@@ -2553,18 +2601,34 @@ class _ModificaPreventivoScreenState
                 ),
               ],
             ),
-            if (numeroAcconti > 1)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  'Acconto indicativo: € '
-                  '${(totale / numeroAcconti).toStringAsFixed(2)}',
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.primary,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+            const SizedBox(height: 4),
+            TextFormField(
+              controller: accontoController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'Valore dell\'acconto',
+                hintText: 'Inserisci l\'importo',
+                prefixText: '€ ',
+                border: OutlineInputBorder(),
               ),
+              onTap: () {
+                if (accontoController.text.trim().isEmpty) {
+                  accontoController.text =
+                      (totale / (numeroAcconti > 0 ? numeroAcconti : 1))
+                          .toStringAsFixed(2);
+                }
+              },
+            ),
+            const SizedBox(height: 6),
+            Text(
+              numeroAcconti > 1
+                  ? 'Inserisci l\'importo di ogni acconto. L\'ultimo verrà calcolato automaticamente sul residuo.'
+                  : 'Inserisci l\'importo dell\'acconto.',
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
             const SizedBox(height: 12),
             Card(
               child: CheckboxListTile(
