@@ -138,7 +138,7 @@ CREATE TABLE preventivi (
 ''');
 
         await db.execute('''
-CREATE TABLE rate (
+CREATE TABLE acconti (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   preventivo_id INTEGER NOT NULL,
   cliente TEXT NOT NULL,
@@ -198,8 +198,30 @@ CREATE TABLE rate (
     return (await database).query('prodotti', orderBy: 'nome COLLATE NOCASE');
   }
 
-  Future<List<Map<String, dynamic>>> getRate() async {
-    return (await database).query('rate', orderBy: 'data_scadenza');
+  Future<List<Map<String, dynamic>>> getAcconti() async {
+    final preventivi = await getPreventivi();
+    final risultato = <Map<String, dynamic>>[];
+
+    for (final p in preventivi) {
+      try {
+        final raw = jsonDecode((p['acconti'] ?? '[]').toString());
+        if (raw is List) {
+          for (var i = 0; i < raw.length; i++) {
+            final a = Map<String, dynamic>.from(raw[i] as Map);
+            risultato.add({
+              'preventivo_id': p['id'],
+              'preventivo': p['numero'],
+              'cliente': p['cliente'],
+              'indice': i + 1,
+              'importo': (a['importo'] as num?)?.toDouble() ?? 0,
+              'data': (a['data'] ?? '').toString(),
+            });
+          }
+        }
+      } catch (_) {}
+    }
+
+    return risultato;
   }
 
   Future<int> insertProdotto({
@@ -320,7 +342,7 @@ CREATE TABLE rate (
       'data': DateTime.now().toIso8601String(),
       'cliente': cliente,
       'totale': totale,
-      'numero_rate': 1,
+      'numero_rate': acconti.length,
       'articoli': jsonEncode(articoli),
       'iva_percent': ivaPercent,
       'accettato': accettato ? 1 : 0,
@@ -357,23 +379,6 @@ CREATE TABLE rate (
     return result;
   }
 
-  Future<void> insertRata({
-    required int preventivoId,
-    required String cliente,
-    required double importo,
-    required DateTime dataScadenza,
-  }) async {
-    await (await database).insert('rate', {
-      'preventivo_id': preventivoId,
-      'cliente': cliente,
-      'importo': importo,
-      'data_scadenza': dataScadenza.toIso8601String(),
-      'pagata': 0,
-    });
-    await autoBackup();
-  }
-
-
 
   Future<Map<String, dynamic>> _backupData() async {
     final db = await database;
@@ -384,7 +389,7 @@ CREATE TABLE rate (
       'clienti': await db.query('clienti'),
       'prodotti': await db.query('prodotti'),
       'preventivi': await db.query('preventivi'),
-      'rate': await db.query('rate'),
+      'acconti': await getAcconti(),
     };
   }
 
@@ -422,19 +427,14 @@ CREATE TABLE rate (
     final preventivi = List<Map<String, dynamic>>.from(
       (decoded['preventivi'] as List? ?? []).map((e) => Map<String, dynamic>.from(e)),
     );
-    final rate = List<Map<String, dynamic>>.from(
-      (decoded['rate'] as List? ?? []).map((e) => Map<String, dynamic>.from(e)),
-    );
     final db = await database;
     await db.transaction((txn) async {
-      await txn.delete('rate');
       await txn.delete('preventivi');
       await txn.delete('prodotti');
       await txn.delete('clienti');
       for (final row in clienti) await txn.insert('clienti', row);
       for (final row in prodotti) await txn.insert('prodotti', row);
       for (final row in preventivi) await txn.insert('preventivi', row);
-      for (final row in rate) await txn.insert('rate', row);
     });
     await createAutomaticBackup();
   }
@@ -509,9 +509,9 @@ class NotificationService {
         when,
         const NotificationDetails(
           android: AndroidNotificationDetails(
-            'rate_channel',
-            'Notifiche Rate',
-            channelDescription: 'Avvisi per le scadenze dei pagamenti rateali',
+            'acconti_channel',
+            'Notifiche Acconti',
+            channelDescription: 'Avvisi per gli acconti e le relative scadenze',
             importance: Importance.max,
             priority: Priority.high,
           ),
@@ -531,10 +531,10 @@ class NotificationService {
           when,
           const NotificationDetails(
             android: AndroidNotificationDetails(
-              'rate_channel',
-              'Notifiche Rate',
+              'acconti_channel',
+              'Notifiche Acconti',
               channelDescription:
-                  'Avvisi per le scadenze dei pagamenti rateali',
+                  'Avvisi per gli acconti e le relative scadenze',
               importance: Importance.max,
               priority: Priority.high,
             ),
@@ -843,7 +843,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int preventivi = 0;
   int clienti = 0;
   int prodotti = 0;
-  int rate = 0;
+  int acconti = 0;
   bool loading = true;
 
   static const _gold = Color(0xFFD4AF37);
@@ -862,14 +862,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
       db.getPreventivi(),
       db.getClienti(),
       db.getProdotti(),
-      db.getRate(),
+      db.getAcconti(),
     ]);
     if (!mounted) return;
     setState(() {
       preventivi = results[0].length;
       clienti = results[1].length;
       prodotti = results[2].length;
-      rate = results[3].length;
+      acconti = results[3].length;
       loading = false;
     });
   }
@@ -979,7 +979,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 _statCard(Icons.receipt_long_rounded, 'Preventivi', preventivi),
                 _statCard(Icons.people_alt_rounded, 'Clienti', clienti),
                 _statCard(Icons.inventory_2_rounded, 'Prodotti', prodotti),
-                _statCard(Icons.payments_rounded, 'Rate', rate),
+                _statCard(Icons.payments_rounded, 'Acconti', acconti),
               ],
             ),
             const SizedBox(height: 16),
@@ -1016,8 +1016,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 _actionCard(
                   Icons.event_available_rounded,
-                  'Rate e scadenze',
-                  () => apri(const RateScreen()),
+                  'Acconti',
+                  () => apri(const AccontiScreen()),
                 ),
                 _actionCard(
                   Icons.notifications_active_rounded,
@@ -1324,86 +1324,124 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
     }
   }
 
-  Future<void> aggiungiAcconto() async {
+Future<void> aggiungiAcconto() async {
     final importoController = TextEditingController();
     final dataController = TextEditingController();
-
-    void aggiungi({required BuildContext dialogContext, required bool chiudi}) {
-      final importo = double.tryParse(
-        importoController.text.trim().replaceAll(',', '.'),
-      );
-
-      if (importo == null || importo <= 0) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Inserisci un importo acconto valido.')),
-        );
-        return;
-      }
-
-      setState(() {
-        acconti.add({
-          'importo': importo,
-          'data': dataController.text.trim(),
-        });
-      });
-
-      importoController.clear();
-      dataController.clear();
-
-      if (chiudi) {
-        Navigator.pop(dialogContext);
-      }
-    }
+    final nuoviAcconti = <Map<String, dynamic>>[];
 
     try {
-      await showDialog<void>(
+      final risultato = await showDialog<List<Map<String, dynamic>>>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Nuovo acconto'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: importoController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(
-                  labelText: 'Importo acconto (€)',
-                  prefixIcon: Icon(Icons.euro),
+        builder: (dialogContext) {
+          return StatefulBuilder(
+            builder: (ctx, setDialogState) {
+              void aggiungiEContinua() {
+                final importo = double.tryParse(
+                  importoController.text.trim().replaceAll(',', '.'),
+                );
+
+                if (importo == null || importo <= 0) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Inserisci un importo acconto valido.'),
+                    ),
+                  );
+                  return;
+                }
+
+                nuoviAcconti.add({
+                  'importo': importo,
+                  'data': dataController.text.trim(),
+                });
+
+                importoController.clear();
+                dataController.clear();
+                setDialogState(() {});
+              }
+
+              void conferma() {
+                final testoImporto = importoController.text.trim();
+                if (testoImporto.isNotEmpty) {
+                  aggiungiEContinua();
+                }
+
+                if (nuoviAcconti.isNotEmpty) {
+                  Navigator.pop(dialogContext, List<Map<String, dynamic>>.from(nuoviAcconti));
+                }
+              }
+
+              return AlertDialog(
+                title: const Text('Aggiungi acconti'),
+                content: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        nuoviAcconti.isEmpty
+                            ? 'Inserisci uno o più acconti.'
+                            : 'Acconti da aggiungere: ${nuoviAcconti.length}',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      if (nuoviAcconti.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        ...nuoviAcconti.asMap().entries.map(
+                          (entry) => Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 2),
+                            child: Text(
+                              '${entry.key + 1}. € ${(entry.value['importo'] as double).toStringAsFixed(2)}'
+                              '${(entry.value['data'] as String).isEmpty ? '' : ' • ${entry.value['data']}'}',
+                            ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: importoController,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: const InputDecoration(
+                          labelText: 'Importo acconto (€)',
+                          prefixIcon: Icon(Icons.euro),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: dataController,
+                        decoration: const InputDecoration(
+                          labelText: 'Data acconto (facoltativa)',
+                          hintText: 'gg/mm/aaaa',
+                          prefixIcon: Icon(Icons.calendar_today_outlined),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: dataController,
-                decoration: const InputDecoration(
-                  labelText: 'Data acconto (facoltativa)',
-                  hintText: 'gg/mm/aaaa',
-                  prefixIcon: Icon(Icons.calendar_today_outlined),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('ANNULLA'),
-            ),
-            OutlinedButton(
-              onPressed: () => aggiungi(
-                dialogContext: ctx,
-                chiudi: false,
-              ),
-              child: const Text('AGGIUNGI ALTRO'),
-            ),
-            FilledButton(
-              onPressed: () => aggiungi(
-                dialogContext: ctx,
-                chiudi: true,
-              ),
-              child: const Text('AGGIUNGI E CHIUDI'),
-            ),
-          ],
-        ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    child: const Text('ANNULLA'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: aggiungiEContinua,
+                    icon: const Icon(Icons.add),
+                    label: const Text('AGGIUNGI ALTRO'),
+                  ),
+                  FilledButton(
+                    onPressed: conferma,
+                    child: const Text('SALVA ACCONTI'),
+                  ),
+                ],
+              );
+            },
+          );
+        },
       );
+
+      if (risultato != null && risultato.isNotEmpty && mounted) {
+        setState(() {
+          acconti.addAll(risultato);
+        });
+      }
     } finally {
       importoController.dispose();
       dataController.dispose();
@@ -1820,7 +1858,7 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
                 label: Text(
                   busy
                       ? 'SALVATAGGIO...'
-                      : 'GENERA PDF E PROGRAMMA RATE',
+                      : 'GENERA PDF CON ACCONTI',
                 ),
               ),
             ),
@@ -1893,12 +1931,6 @@ class _ListaPreventiviScreenState extends State<ListaPreventiviScreen> {
 
     if (ok == true) {
       final db = await DatabaseHelper.instance.database;
-
-      await db.delete(
-        'rate',
-        where: 'preventivo_id = ?',
-        whereArgs: [preventivo['id']],
-      );
 
       await db.delete(
         'preventivi',
@@ -2309,86 +2341,124 @@ class _ModificaPreventivoScreenState
     }
   }
 
-  Future<void> aggiungiAcconto() async {
+Future<void> aggiungiAcconto() async {
     final importoController = TextEditingController();
     final dataController = TextEditingController();
-
-    void aggiungi({required BuildContext dialogContext, required bool chiudi}) {
-      final importo = double.tryParse(
-        importoController.text.trim().replaceAll(',', '.'),
-      );
-
-      if (importo == null || importo <= 0) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Inserisci un importo acconto valido.')),
-        );
-        return;
-      }
-
-      setState(() {
-        acconti.add({
-          'importo': importo,
-          'data': dataController.text.trim(),
-        });
-      });
-
-      importoController.clear();
-      dataController.clear();
-
-      if (chiudi) {
-        Navigator.pop(dialogContext);
-      }
-    }
+    final nuoviAcconti = <Map<String, dynamic>>[];
 
     try {
-      await showDialog<void>(
+      final risultato = await showDialog<List<Map<String, dynamic>>>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Nuovo acconto'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: importoController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(
-                  labelText: 'Importo acconto (€)',
-                  prefixIcon: Icon(Icons.euro),
+        builder: (dialogContext) {
+          return StatefulBuilder(
+            builder: (ctx, setDialogState) {
+              void aggiungiEContinua() {
+                final importo = double.tryParse(
+                  importoController.text.trim().replaceAll(',', '.'),
+                );
+
+                if (importo == null || importo <= 0) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Inserisci un importo acconto valido.'),
+                    ),
+                  );
+                  return;
+                }
+
+                nuoviAcconti.add({
+                  'importo': importo,
+                  'data': dataController.text.trim(),
+                });
+
+                importoController.clear();
+                dataController.clear();
+                setDialogState(() {});
+              }
+
+              void conferma() {
+                final testoImporto = importoController.text.trim();
+                if (testoImporto.isNotEmpty) {
+                  aggiungiEContinua();
+                }
+
+                if (nuoviAcconti.isNotEmpty) {
+                  Navigator.pop(dialogContext, List<Map<String, dynamic>>.from(nuoviAcconti));
+                }
+              }
+
+              return AlertDialog(
+                title: const Text('Aggiungi acconti'),
+                content: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        nuoviAcconti.isEmpty
+                            ? 'Inserisci uno o più acconti.'
+                            : 'Acconti da aggiungere: ${nuoviAcconti.length}',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      if (nuoviAcconti.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        ...nuoviAcconti.asMap().entries.map(
+                          (entry) => Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 2),
+                            child: Text(
+                              '${entry.key + 1}. € ${(entry.value['importo'] as double).toStringAsFixed(2)}'
+                              '${(entry.value['data'] as String).isEmpty ? '' : ' • ${entry.value['data']}'}',
+                            ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: importoController,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: const InputDecoration(
+                          labelText: 'Importo acconto (€)',
+                          prefixIcon: Icon(Icons.euro),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: dataController,
+                        decoration: const InputDecoration(
+                          labelText: 'Data acconto (facoltativa)',
+                          hintText: 'gg/mm/aaaa',
+                          prefixIcon: Icon(Icons.calendar_today_outlined),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: dataController,
-                decoration: const InputDecoration(
-                  labelText: 'Data acconto (facoltativa)',
-                  hintText: 'gg/mm/aaaa',
-                  prefixIcon: Icon(Icons.calendar_today_outlined),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('ANNULLA'),
-            ),
-            OutlinedButton(
-              onPressed: () => aggiungi(
-                dialogContext: ctx,
-                chiudi: false,
-              ),
-              child: const Text('AGGIUNGI ALTRO'),
-            ),
-            FilledButton(
-              onPressed: () => aggiungi(
-                dialogContext: ctx,
-                chiudi: true,
-              ),
-              child: const Text('AGGIUNGI E CHIUDI'),
-            ),
-          ],
-        ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    child: const Text('ANNULLA'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: aggiungiEContinua,
+                    icon: const Icon(Icons.add),
+                    label: const Text('AGGIUNGI ALTRO'),
+                  ),
+                  FilledButton(
+                    onPressed: conferma,
+                    child: const Text('SALVA ACCONTI'),
+                  ),
+                ],
+              );
+            },
+          );
+        },
       );
+
+      if (risultato != null && risultato.isNotEmpty && mounted) {
+        setState(() {
+          acconti.addAll(risultato);
+        });
+      }
     } finally {
       importoController.dispose();
       dataController.dispose();
@@ -3602,7 +3672,7 @@ class _BackupScreenState extends State<BackupScreen> {
         builder: (context) => AlertDialog(
           title: const Text('Importa backup'),
           content: const Text(
-            'L’importazione sostituirà i dati attuali di clienti, servizi, preventivi e rate. Continuare?',
+            'L’importazione sostituirà i dati attuali di clienti, servizi, preventivi e acconti. Continuare?',
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('ANNULLA')),
@@ -3678,7 +3748,7 @@ class _BackupScreenState extends State<BackupScreen> {
           ],
           const SizedBox(height: 18),
           const Text(
-            'Il backup contiene clienti, prodotti/servizi, preventivi e rate. L’importazione sostituisce i dati presenti sul dispositivo.',
+            'Il backup contiene clienti, prodotti/servizi, preventivi e acconti. L’importazione sostituisce i dati presenti sul dispositivo.',
             style: TextStyle(fontSize: 13),
           ),
         ],
@@ -3751,8 +3821,8 @@ class _NotificheScreenState extends State<NotificheScreen> {
             const SizedBox(height: 12),
             Text(
               abilitate == true
-                  ? 'Le scadenze delle rate possono essere segnalate automaticamente.'
-                  : 'Per ricevere gli avvisi delle rate, abilita le notifiche per questa app nelle impostazioni di Android.',
+                  ? 'Le scadenze delle acconti possono essere segnalate automaticamente.'
+                  : 'Per ricevere gli avvisi delle acconti, abilita le notifiche per questa app nelle impostazioni di Android.',
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
@@ -3774,68 +3844,56 @@ class _NotificheScreenState extends State<NotificheScreen> {
   }
 }
 
-class RateScreen extends StatelessWidget {
-  const RateScreen({super.key});
+class AccontiScreen extends StatelessWidget {
+  const AccontiScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Rate e scadenze'),
+        title: const Text('Acconti'),
       ),
       body: FutureBuilder<List<Map<String, dynamic>>>(
-        future: DatabaseHelper.instance.getRate(),
+        future: DatabaseHelper.instance.getAcconti(),
         builder: (context, snapshot) {
           if (!snapshot.hasData) {
-            return const Center(
-              child: CircularProgressIndicator(),
-            );
+            return const Center(child: CircularProgressIndicator());
           }
 
-          final rate = snapshot.data!;
+          final acconti = snapshot.data!;
 
-          if (rate.isEmpty) {
+          if (acconti.isEmpty) {
             return const _EmptyState(
               icon: Icons.payments_outlined,
-              text: 'Nessuna rata programmata.',
+              text: 'Nessun acconto inserito.',
             );
           }
 
           return ListView.separated(
             padding: const EdgeInsets.all(12),
-            itemCount: rate.length,
-            separatorBuilder: (_, __) =>
-                const SizedBox(height: 8),
+            itemCount: acconti.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 8),
             itemBuilder: (context, index) {
-              final x = rate[index];
-
-              final data = DateTime.parse(
-                x['data_scadenza'],
-              );
-
-              final pagata = x['pagata'] == 1;
+              final x = acconti[index];
+              final data = (x['data'] ?? '').toString();
 
               return Card(
                 child: ListTile(
-                  leading: CircleAvatar(
-                    child: Icon(
-                      pagata
-                          ? Icons.check
-                          : Icons.schedule,
-                    ),
+                  leading: const CircleAvatar(
+                    child: Icon(Icons.payments_outlined),
                   ),
                   title: Text(
-                    x['cliente'],
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                    ),
+                    '${x['cliente']} • Acconto ${x['indice']}',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                   subtitle: Text(
-                    'Scadenza: '
-                    '${DateFormat('dd/MM/yyyy').format(data)}',
+                    data.isEmpty
+                        ? 'Preventivo: ${x['preventivo']} • Data non indicata'
+                        : 'Preventivo: ${x['preventivo']} • Data: $data',
                   ),
                   trailing: Text(
                     '€ ${(x['importo'] as num).toStringAsFixed(2)}',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ),
               );
