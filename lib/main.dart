@@ -34,12 +34,48 @@ class PreventiviApp extends StatelessWidget {
       title: 'Gestione Preventivi',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF1E3A8A)),
         useMaterial3: true,
-        inputDecorationTheme: const InputDecorationTheme(
-          border: OutlineInputBorder(),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFFC99700),
+          brightness: Brightness.light,
+        ).copyWith(
+          primary: const Color(0xFF9A7000),
+          onPrimary: Colors.white,
+          secondary: const Color(0xFFD4AF37),
+          surface: const Color(0xFFFFFBF0),
+          onSurface: const Color(0xFF332A16),
         ),
-        cardTheme: const CardThemeData(margin: EdgeInsets.zero),
+        scaffoldBackgroundColor: const Color(0xFFFFF9E8),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFFD4AF37),
+          foregroundColor: Colors.white,
+          elevation: 0,
+          centerTitle: true,
+        ),
+        cardTheme: const CardThemeData(
+          margin: EdgeInsets.zero,
+          elevation: 1.5,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(16)),
+          ),
+        ),
+        inputDecorationTheme: const InputDecorationTheme(
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(12)),
+          ),
+          filled: true,
+          fillColor: Colors.white,
+        ),
+        filledButtonTheme: FilledButtonThemeData(
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF9A7000),
+            foregroundColor: Colors.white,
+            minimumSize: const Size(0, 48),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        ),
       ),
       home: const DashboardScreen(),
     );
@@ -773,6 +809,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int rate = 0;
   bool loading = true;
 
+  static const _gold = Color(0xFFD4AF37);
+  static const _darkGold = Color(0xFF9A7000);
+  static const _cream = Color(0xFFFFF9E8);
+
   @override
   void initState() {
     super.initState();
@@ -781,16 +821,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> caricaStatistiche() async {
     final db = DatabaseHelper.instance;
-
     final results = await Future.wait([
       db.getPreventivi(),
       db.getClienti(),
       db.getProdotti(),
       db.getRate(),
     ]);
-
     if (!mounted) return;
-
     setState(() {
       preventivi = results[0].length;
       clienti = results[1].length;
@@ -810,156 +847,152 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final primary = Theme.of(context).colorScheme.primary;
-
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'Preventivi',
-          style: TextStyle(fontWeight: FontWeight.bold),
+          'PREVENTIVI',
+          style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 1.2),
         ),
-        centerTitle: true,
-        backgroundColor: primary,
-        foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            tooltip: 'Aggiorna',
+            onPressed: caricaStatistiche,
+            icon: const Icon(Icons.refresh_rounded),
+          ),
+        ],
       ),
       body: RefreshIndicator(
+        color: _darkGold,
         onRefresh: caricaStatistiche,
         child: ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(14, 14, 14, 24),
           children: [
+            // Azione principale sempre immediatamente disponibile.
             Card(
-              color: primary,
+              color: _gold,
               child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+                child: Row(
                   children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(10),
-                      child: Image.asset(
-                        'assets/logo.png',
-                        width: double.infinity,
-                        height: 150,
-                        fit: BoxFit.contain,
-                        filterQuality: FilterQuality.high,
+                    Container(
+                      width: 64,
+                      height: 64,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: .20),
+                        borderRadius: BorderRadius.circular(16),
                       ),
-                    ),
-                    const SizedBox(height: 14),
-                    const Text(
-                      'Gestione Preventivi',
-                      style: TextStyle(
+                      child: const Icon(
+                        Icons.receipt_long_rounded,
                         color: Colors.white,
-                        fontSize: 25,
-                        fontWeight: FontWeight.bold,
+                        size: 34,
                       ),
                     ),
-                    const SizedBox(height: 5),
-                    const Text(
-                      'Crea, salva e condividi i tuoi preventivi.',
-                      style: TextStyle(color: Colors.white70),
-                    ),
-                    const SizedBox(height: 18),
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton.icon(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: Colors.white,
-                          foregroundColor: primary,
-                        ),
-                        onPressed: () =>
-                            apri(const NuovoPreventivoScreen()),
-                        icon: const Icon(Icons.add),
-                        label: const Text(
-                          'NUOVO PREVENTIVO',
-                          style: TextStyle(fontWeight: FontWeight.bold),
-                        ),
+                    const SizedBox(width: 14),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Gestione Preventivi',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 21,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          SizedBox(height: 3),
+                          Text(
+                            'Crea e gestisci i tuoi preventivi',
+                            style: TextStyle(color: Colors.white),
+                          ),
+                        ],
                       ),
+                    ),
+                    IconButton.filled(
+                      style: IconButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: _darkGold,
+                        minimumSize: const Size(52, 52),
+                      ),
+                      tooltip: 'Nuovo preventivo',
+                      onPressed: () => apri(const NuovoPreventivoScreen()),
+                      icon: const Icon(Icons.add_rounded, size: 30),
                     ),
                   ],
                 ),
               ),
             ),
+            const SizedBox(height: 14),
+
+            const Padding(
+              padding: EdgeInsets.only(left: 2, bottom: 8),
+              child: Text(
+                'Riepilogo',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+              ),
+            ),
+            GridView.count(
+              crossAxisCount: 2,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              mainAxisSpacing: 10,
+              crossAxisSpacing: 10,
+              childAspectRatio: 1.75,
+              children: [
+                _statCard(Icons.receipt_long_rounded, 'Preventivi', preventivi),
+                _statCard(Icons.people_alt_rounded, 'Clienti', clienti),
+                _statCard(Icons.inventory_2_rounded, 'Prodotti', prodotti),
+                _statCard(Icons.payments_rounded, 'Rate', rate),
+              ],
+            ),
             const SizedBox(height: 16),
-            Row(
+
+            const Padding(
+              padding: EdgeInsets.only(left: 2, bottom: 8),
+              child: Text(
+                'Accesso rapido',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+              ),
+            ),
+            GridView.count(
+              crossAxisCount: 2,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              mainAxisSpacing: 10,
+              crossAxisSpacing: 10,
+              childAspectRatio: 1.22,
               children: [
-                Expanded(
-                  child: _statCard(
-                    Icons.receipt_long,
-                    'Preventivi',
-                    preventivi,
-                  ),
+                _actionCard(
+                  Icons.receipt_long_rounded,
+                  'Preventivi',
+                  () => apri(const ListaPreventiviScreen()),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _statCard(
-                    Icons.people_alt_outlined,
-                    'Clienti',
-                    clienti,
-                  ),
+                _actionCard(
+                  Icons.people_alt_rounded,
+                  'Clienti',
+                  () => apri(const ClientiScreen()),
+                ),
+                _actionCard(
+                  Icons.inventory_2_rounded,
+                  'Prodotti / Servizi',
+                  () => apri(const ProdottiScreen()),
+                ),
+                _actionCard(
+                  Icons.event_available_rounded,
+                  'Rate e scadenze',
+                  () => apri(const RateScreen()),
+                ),
+                _actionCard(
+                  Icons.notifications_active_rounded,
+                  'Notifiche',
+                  () => apri(const NotificheScreen()),
+                ),
+                _actionCard(
+                  Icons.backup_rounded,
+                  'Backup e dati',
+                  () => apri(const BackupScreen()),
                 ),
               ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: _statCard(
-                    Icons.inventory_2_outlined,
-                    'Prodotti',
-                    prodotti,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _statCard(
-                    Icons.payments_outlined,
-                    'Rate',
-                    rate,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              'Gestione',
-              style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 10),
-            _menuTile(
-              Icons.receipt_long,
-              'Lista preventivi',
-              'Visualizza i preventivi salvati',
-              () => apri(const ListaPreventiviScreen()),
-            ),
-            _menuTile(
-              Icons.people_alt_outlined,
-              'Clienti',
-              'Gestisci l’anagrafica clienti',
-              () => apri(const ClientiScreen()),
-            ),
-            _menuTile(
-              Icons.inventory_2_outlined,
-              'Prodotti / Servizi',
-              'Gestisci prodotti e prezzi',
-              () => apri(const ProdottiScreen()),
-            ),
-            _menuTile(
-              Icons.payments_outlined,
-              'Rate e scadenze',
-              'Controlla le rate programmate',
-              () => apri(const RateScreen()),
-            ),
-            _menuTile(
-              Icons.backup_outlined,
-              'Backup e dati',
-              'Esporta, importa e gestisci il backup',
-              () => apri(const BackupScreen()),
-            ),
-            _menuTile(
-              Icons.notifications_active_outlined,
-              'Notifiche',
-              'Abilita gli avvisi delle scadenze',
-              () => apri(const NotificheScreen()),
             ),
           ],
         ),
@@ -969,47 +1002,82 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _statCard(IconData icon, String label, int value) {
     return Card(
+      color: Colors.white,
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
-        child: Column(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
           children: [
-            Icon(
-              icon,
-              size: 30,
-              color: Theme.of(context).colorScheme.primary,
+            Container(
+              width: 46,
+              height: 46,
+              decoration: BoxDecoration(
+                color: _cream,
+                borderRadius: BorderRadius.circular(13),
+              ),
+              child: Icon(icon, color: _darkGold, size: 27),
             ),
-            const SizedBox(height: 7),
-            Text(
-              loading ? '…' : '$value',
-              style: const TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    loading ? '…' : '$value',
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12.5),
+                  ),
+                ],
               ),
             ),
-            Text(label),
           ],
         ),
       ),
     );
   }
 
-  Widget _menuTile(
-    IconData icon,
-    String title,
-    String subtitle,
-    VoidCallback onTap,
-  ) {
+  Widget _actionCard(IconData icon, String title, VoidCallback onTap) {
     return Card(
-      margin: const EdgeInsets.only(bottom: 9),
-      child: ListTile(
-        leading: CircleAvatar(child: Icon(icon)),
-        title: Text(
-          title,
-          style: const TextStyle(fontWeight: FontWeight.w600),
-        ),
-        subtitle: Text(subtitle),
-        trailing: const Icon(Icons.chevron_right),
+      color: Colors.white,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
         onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 54,
+                height: 54,
+                decoration: BoxDecoration(
+                  color: _cream,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Icon(icon, size: 31, color: _darkGold),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13.5,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
