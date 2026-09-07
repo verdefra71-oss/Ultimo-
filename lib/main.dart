@@ -2455,9 +2455,52 @@ Future<void> aggiungiAcconto() async {
       );
 
       if (risultato != null && risultato.isNotEmpty && mounted) {
+        final aggiunti = List<Map<String, dynamic>>.from(risultato);
         setState(() {
-          acconti.addAll(risultato);
+          acconti.addAll(aggiunti);
         });
+
+        // Nella schermata MODIFICA gli acconti vengono salvati subito nel
+        // preventivo, senza dover uscire dalla schermata o attendere la
+        // rigenerazione del PDF. In questo modo anche un nuovo acconto
+        // aggiunto dopo la prima creazione del PDF resta memorizzato.
+        try {
+          final preventivoId = (widget.preventivo['id'] as num).toInt();
+          final updated = await DatabaseHelper.instance.updatePreventivo(
+            id: preventivoId,
+            cliente: clienteController.text.trim(),
+            totale: totale,
+            articoli: articoli,
+            ivaPercent: ivaPercent,
+            accettato: accettato,
+            acconti: acconti,
+          );
+
+          if (updated == 0) {
+            throw Exception('Preventivo non trovato nel database.');
+          }
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  aggiunti.length == 1
+                      ? 'Acconto aggiunto e salvato nel preventivo.'
+                      : '${aggiunti.length} acconti aggiunti e salvati nel preventivo.',
+                ),
+              ),
+            );
+          }
+        } catch (e) {
+          if (mounted) {
+            setState(() {
+              acconti.removeRange(acconti.length - aggiunti.length, acconti.length);
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Impossibile salvare l'acconto: $e')),
+            );
+          }
+        }
       }
     } finally {
       importoController.dispose();
