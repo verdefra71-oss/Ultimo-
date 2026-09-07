@@ -99,7 +99,7 @@ class DatabaseHelper {
 
     return openDatabase(
       p.join(dbPath, fileName),
-      version: 8,
+      version: 7,
       onCreate: (db, version) async {
         await db.execute('''
 CREATE TABLE clienti (
@@ -133,8 +133,7 @@ CREATE TABLE preventivi (
   articoli TEXT NOT NULL DEFAULT '[]',
   iva_percent REAL NOT NULL DEFAULT 0,
   accettato INTEGER NOT NULL DEFAULT 0,
-  acconti TEXT NOT NULL DEFAULT '[]',
-  sconto_percent REAL NOT NULL DEFAULT 0
+  acconti TEXT NOT NULL DEFAULT '[]'
 )
 ''');
 
@@ -181,11 +180,6 @@ CREATE TABLE acconti (
         if (oldVersion < 7) {
           await db.execute(
             "ALTER TABLE preventivi ADD COLUMN acconti TEXT NOT NULL DEFAULT '[]'",
-          );
-        }
-        if (oldVersion < 8) {
-          await db.execute(
-            "ALTER TABLE preventivi ADD COLUMN sconto_percent REAL NOT NULL DEFAULT 0",
           );
         }
       },
@@ -342,7 +336,6 @@ CREATE TABLE acconti (
     required double ivaPercent,
     required bool accettato,
     required List<Map<String, dynamic>> acconti,
-    required double scontoPercent,
   }) async {
     final id = await (await database).insert('preventivi', {
       'numero': numero,
@@ -354,7 +347,6 @@ CREATE TABLE acconti (
       'iva_percent': ivaPercent,
       'accettato': accettato ? 1 : 0,
       'acconti': jsonEncode(acconti),
-      'sconto_percent': scontoPercent,
     });
     await autoBackup();
     return id;
@@ -389,7 +381,6 @@ CREATE TABLE acconti (
     required double ivaPercent,
     required bool accettato,
     required List<Map<String, dynamic>> acconti,
-    required double scontoPercent,
   }) async {
     final result = await (await database).update(
       'preventivi',
@@ -401,7 +392,6 @@ CREATE TABLE acconti (
         'iva_percent': ivaPercent,
         'accettato': accettato ? 1 : 0,
         'acconti': jsonEncode(acconti),
-        'sconto_percent': scontoPercent,
       },
       where: 'id = ?',
       whereArgs: [id],
@@ -590,7 +580,6 @@ class PdfGenerator {
     required double ivaPercent,
     required bool accettato,
     required List<Map<String, dynamic>> acconti,
-    required double scontoPercent,
   }) async {
     // Il font predefinito del pacchetto PDF non contiene il carattere euro (€).
     // Carichiamo quindi un font Unicode con supporto completo al simbolo €.
@@ -629,14 +618,12 @@ class PdfGenerator {
         return sum + (prezzo * quantita);
       },
     );
-    final sconto = imponibile * scontoPercent / 100;
-    final imponibileScontato = (imponibile - sconto).clamp(0, double.infinity).toDouble();
-    final iva = imponibileScontato * ivaPercent / 100;
-    final totale = imponibileScontato + iva;
+    final iva = imponibile * ivaPercent / 100;
+    final totale = imponibile + iva;
     final data = DateFormat('dd/MM/yyyy').format(DateTime.now());
 
     final gold = PdfColor.fromHex('#B8860B');
-    final dark = gold;
+    final dark = PdfColor.fromHex('#1E293B');
 
     String value(String key) => (datiCliente?[key] ?? '').toString().trim();
 
@@ -724,8 +711,8 @@ class PdfGenerator {
             width: double.infinity,
             padding: const pw.EdgeInsets.all(12),
             decoration: pw.BoxDecoration(
-              color: PdfColors.white,
-              border: pw.Border.all(color: gold),
+              color: PdfColors.grey100,
+              border: pw.Border.all(color: PdfColors.grey300),
               borderRadius: const pw.BorderRadius.all(pw.Radius.circular(6)),
             ),
             child: pw.Column(
@@ -750,7 +737,7 @@ class PdfGenerator {
               fontWeight: pw.FontWeight.bold,
               color: PdfColors.white,
             ),
-            headerDecoration: pw.BoxDecoration(color: gold),
+            headerDecoration: pw.BoxDecoration(color: dark),
             cellAlignments: {
               0: pw.Alignment.center,
               1: pw.Alignment.centerLeft,
@@ -773,10 +760,6 @@ class PdfGenerator {
               crossAxisAlignment: pw.CrossAxisAlignment.end,
               children: [
                 pw.Text('Imponibile: € ${imponibile.toStringAsFixed(2)}'),
-                if (scontoPercent > 0)
-                  pw.Text('Sconto ${scontoPercent.toStringAsFixed(0)}%: -€ ${sconto.toStringAsFixed(2)}',
-                    style: pw.TextStyle(color: gold, fontWeight: pw.FontWeight.bold)),
-                pw.Text('Imponibile scontato: € ${imponibileScontato.toStringAsFixed(2)}'),
                 if (ivaPercent == 0)
                   pw.Text(
                     'FUORI CAMPO IVA FCI',
@@ -1315,7 +1298,6 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
   final prodottoController = TextEditingController();
   final prezzoController = TextEditingController();
   final quantitaController = TextEditingController(text: '1');
-  final scontoController = TextEditingController(text: '0');
 
   final List<Map<String, dynamic>> articoli = [];
 
@@ -1333,18 +1315,9 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
         },
       );
 
-  double get scontoPercent =>
-      double.tryParse(scontoController.text.trim().replaceAll(',', '.')) ?? 0;
+  double get iva => imponibile * ivaPercent / 100;
 
-  double get sconto =>
-      (imponibile * scontoPercent.clamp(0, 100) / 100);
-
-  double get imponibileScontato =>
-      (imponibile - sconto).clamp(0, double.infinity).toDouble();
-
-  double get iva => imponibileScontato * ivaPercent / 100;
-
-  double get totale => imponibileScontato + iva;
+  double get totale => imponibile + iva;
 
   Future<void> scegliCliente() async {
     final nome = await selezionaCliente(context);
@@ -1559,7 +1532,6 @@ Future<void> aggiungiAcconto() async {
         ivaPercent: ivaPercent,
         accettato: accettato,
         acconti: acconti,
-        scontoPercent: scontoPercent,
       );
 
       final clienti = await db.getClienti();
@@ -1579,7 +1551,6 @@ Future<void> aggiungiAcconto() async {
         ivaPercent: ivaPercent,
         accettato: accettato,
         acconti: acconti,
-        scontoPercent: scontoPercent,
       );
 
       final notificheOk = await NotificationService().notificheAbilitate();
@@ -1758,17 +1729,6 @@ Future<void> aggiungiAcconto() async {
                 padding: const EdgeInsets.all(14),
                 child: Column(
                   children: [
-                    TextField(
-                      controller: scontoController,
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      onChanged: (_) => setState(() {}),
-                      decoration: const InputDecoration(
-                        labelText: 'Sconto (%)',
-                        hintText: 'Inserisci la percentuale di sconto',
-                        prefixIcon: Icon(Icons.percent),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
                     _riepilogoRiga('Imponibile', imponibile),
                     const SizedBox(height: 10),
                     Row(
@@ -1795,10 +1755,6 @@ Future<void> aggiungiAcconto() async {
                       ],
                     ),
                     const Divider(),
-                    if (scontoPercent > 0)
-                      _riepilogoRiga('Sconto ${scontoPercent.toStringAsFixed(0)}%', -sconto),
-                    if (scontoPercent > 0)
-                      _riepilogoRiga('Imponibile scontato', imponibileScontato),
                     _riepilogoRiga(
                       'TOTALE',
                       totale,
@@ -2104,7 +2060,6 @@ class _ListaPreventiviScreenState extends State<ListaPreventiviScreen> {
                       ivaPercent: (x['iva_percent'] as num?)?.toDouble() ?? 0,
                       accettato: (x['accettato'] as num?)?.toInt() == 1,
                       acconti: _accontiDaPreventivo(x),
-                      scontoPercent: (x['sconto_percent'] as num?)?.toDouble() ?? 0,
                     );
                   },
                   icon: const Icon(Icons.picture_as_pdf),
@@ -2348,7 +2303,6 @@ class _ModificaPreventivoScreenState
   final prodottoController = TextEditingController();
   final prezzoController = TextEditingController();
   final quantitaController = TextEditingController(text: '1');
-  late final TextEditingController scontoController;
 
   late List<Map<String, dynamic>> articoli;
   late List<Map<String, dynamic>> acconti;
@@ -2366,18 +2320,9 @@ class _ModificaPreventivoScreenState
         },
       );
 
-  double get scontoPercent =>
-      double.tryParse(scontoController.text.trim().replaceAll(',', '.')) ?? 0;
+  double get iva => imponibile * ivaPercent / 100;
 
-  double get sconto =>
-      (imponibile * scontoPercent.clamp(0, 100) / 100);
-
-  double get imponibileScontato =>
-      (imponibile - sconto).clamp(0, double.infinity).toDouble();
-
-  double get iva => imponibileScontato * ivaPercent / 100;
-
-  double get totale => imponibileScontato + iva;
+  double get totale => imponibile + iva;
 
   Future<void> scegliCliente() async {
     final nome = await selezionaCliente(context);
@@ -2582,9 +2527,6 @@ Future<void> aggiungiAcconto() async {
     clienteController = TextEditingController(
       text: widget.preventivo['cliente'],
     );
-    scontoController = TextEditingController(
-      text: ((widget.preventivo['sconto_percent'] as num?)?.toDouble() ?? 0).toStringAsFixed(0),
-    );
 
     acconti = _parseAcconti(widget.preventivo['acconti']);
     ivaPercent =
@@ -2614,7 +2556,6 @@ Future<void> aggiungiAcconto() async {
     prodottoController.dispose();
     prezzoController.dispose();
     quantitaController.dispose();
-    scontoController.dispose();
     super.dispose();
   }
 
@@ -2673,7 +2614,6 @@ Future<void> aggiungiAcconto() async {
         ivaPercent: ivaPercent,
         accettato: accettato,
         acconti: acconti,
-        scontoPercent: scontoPercent,
       );
 
       if (updated == 0) {
@@ -2687,7 +2627,6 @@ Future<void> aggiungiAcconto() async {
         ivaPercent: ivaPercent,
         accettato: accettato,
         acconti: acconti,
-        scontoPercent: scontoPercent,
       );
 
       final notificheOk = await NotificationService().notificheAbilitate();
@@ -2862,17 +2801,6 @@ Future<void> aggiungiAcconto() async {
                 padding: const EdgeInsets.all(14),
                 child: Column(
                   children: [
-                    TextField(
-                      controller: scontoController,
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      onChanged: (_) => setState(() {}),
-                      decoration: const InputDecoration(
-                        labelText: 'Sconto (%)',
-                        hintText: 'Inserisci la percentuale di sconto',
-                        prefixIcon: Icon(Icons.percent),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
                     _riepilogoRiga('Imponibile', imponibile),
                     const SizedBox(height: 10),
                     Row(
@@ -2899,10 +2827,6 @@ Future<void> aggiungiAcconto() async {
                       ],
                     ),
                     const Divider(),
-                    if (scontoPercent > 0)
-                      _riepilogoRiga('Sconto ${scontoPercent.toStringAsFixed(0)}%', -sconto),
-                    if (scontoPercent > 0)
-                      _riepilogoRiga('Imponibile scontato', imponibileScontato),
                     _riepilogoRiga(
                       'TOTALE',
                       totale,
