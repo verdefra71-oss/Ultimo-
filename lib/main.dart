@@ -985,7 +985,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             const Padding(
               padding: EdgeInsets.only(left: 2, bottom: 8),
               child: Text(
-                'Riepilogo',
+                'Riepilogo e accesso rapido',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
               ),
             ),
@@ -995,49 +995,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
               physics: const NeverScrollableScrollPhysics(),
               mainAxisSpacing: 10,
               crossAxisSpacing: 10,
-              childAspectRatio: 1.75,
+              childAspectRatio: 1.38,
               children: [
-                _statCard(Icons.receipt_long_rounded, 'Preventivi', preventivi),
-                _statCard(Icons.people_alt_rounded, 'Clienti', clienti),
-                _statCard(Icons.inventory_2_rounded, 'Prodotti', prodotti),
-                _statCard(Icons.payments_rounded, 'Acconti', acconti),
-              ],
-            ),
-            const SizedBox(height: 16),
-
-            const Padding(
-              padding: EdgeInsets.only(left: 2, bottom: 8),
-              child: Text(
-                'Accesso rapido',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-              ),
-            ),
-            GridView.count(
-              crossAxisCount: 2,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              mainAxisSpacing: 10,
-              crossAxisSpacing: 10,
-              childAspectRatio: 1.22,
-              children: [
-                _actionCard(
+                _statCard(
                   Icons.receipt_long_rounded,
                   'Preventivi',
+                  preventivi,
                   () => apri(const ListaPreventiviScreen()),
                 ),
-                _actionCard(
+                _statCard(
                   Icons.people_alt_rounded,
                   'Clienti',
+                  clienti,
                   () => apri(const ClientiScreen()),
                 ),
-                _actionCard(
+                _statCard(
                   Icons.inventory_2_rounded,
                   'Prodotti / Servizi',
+                  prodotti,
                   () => apri(const ProdottiScreen()),
                 ),
-                _actionCard(
-                  Icons.event_available_rounded,
+                _statCard(
+                  Icons.payments_rounded,
                   'Acconti',
+                  acconti,
                   () => apri(const AccontiScreen()),
                 ),
                 _actionCard(
@@ -1058,45 +1039,57 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _statCard(IconData icon, String label, int value) {
+  Widget _statCard(
+    IconData icon,
+    String label,
+    int value,
+    VoidCallback onTap,
+  ) {
     return Card(
       color: Colors.white,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        child: Row(
-          children: [
-            Container(
-              width: 46,
-              height: 46,
-              decoration: BoxDecoration(
-                color: _cream,
-                borderRadius: BorderRadius.circular(13),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              Container(
+                width: 50,
+                height: 50,
+                decoration: BoxDecoration(
+                  color: _cream,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(icon, color: _darkGold, size: 29),
               ),
-              child: Icon(icon, color: _darkGold, size: 27),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    loading ? '…' : '$value',
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w800,
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      loading ? '…' : '$value',
+                      style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
-                  ),
-                  Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12.5),
-                  ),
-                ],
+                    Text(
+                      label,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
