@@ -352,6 +352,27 @@ CREATE TABLE acconti (
     return id;
   }
 
+  /// Salva SOLO gli acconti di un preventivo esistente.
+  /// Questo metodo viene usato dalla schermata Modifica preventivo quando
+  /// l'utente aggiunge un nuovo acconto dopo aver già generato il PDF.
+  Future<int> updateAccontiPreventivo({
+    required int id,
+    required List<Map<String, dynamic>> acconti,
+  }) async {
+    final db = await database;
+    final result = await db.update(
+      'preventivi',
+      {
+        'acconti': jsonEncode(acconti),
+        'numero_rate': acconti.length,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    await autoBackup();
+    return result;
+  }
+
   Future<int> updatePreventivo({
     required int id,
     required String cliente,
@@ -2456,24 +2477,18 @@ Future<void> aggiungiAcconto() async {
 
       if (risultato != null && risultato.isNotEmpty && mounted) {
         final aggiunti = List<Map<String, dynamic>>.from(risultato);
-        setState(() {
-          acconti.addAll(aggiunti);
-        });
-
-        // Nella schermata MODIFICA gli acconti vengono salvati subito nel
-        // preventivo, senza dover uscire dalla schermata o attendere la
-        // rigenerazione del PDF. In questo modo anche un nuovo acconto
-        // aggiunto dopo la prima creazione del PDF resta memorizzato.
         try {
           final preventivoId = (widget.preventivo['id'] as num).toInt();
-          final updated = await DatabaseHelper.instance.updatePreventivo(
+          final nuovaLista = <Map<String, dynamic>>[
+            ...acconti,
+            ...aggiunti,
+          ];
+
+          // Salvataggio diretto degli acconti: non dipende dalla generazione
+          // del PDF e non riscrive gli altri dati del preventivo.
+          final updated = await DatabaseHelper.instance.updateAccontiPreventivo(
             id: preventivoId,
-            cliente: clienteController.text.trim(),
-            totale: totale,
-            articoli: articoli,
-            ivaPercent: ivaPercent,
-            accettato: accettato,
-            acconti: acconti,
+            acconti: nuovaLista,
           );
 
           if (updated == 0) {
@@ -2481,6 +2496,9 @@ Future<void> aggiungiAcconto() async {
           }
 
           if (mounted) {
+            setState(() {
+              acconti = nuovaLista;
+            });
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(
@@ -2493,9 +2511,6 @@ Future<void> aggiungiAcconto() async {
           }
         } catch (e) {
           if (mounted) {
-            setState(() {
-              acconti.removeRange(acconti.length - aggiunti.length, acconti.length);
-            });
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(content: Text("Impossibile salvare l'acconto: $e")),
             );
