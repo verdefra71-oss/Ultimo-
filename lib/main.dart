@@ -2497,7 +2497,7 @@ Future<void> aggiungiAcconto() async {
               acconti.removeRange(acconti.length - aggiunti.length, acconti.length);
             });
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Impossibile salvare l'acconto: $e')),
+              SnackBar(content: Text("Impossibile salvare l'acconto: $e")),
             );
           }
         }
