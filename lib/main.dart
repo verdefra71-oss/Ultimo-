@@ -1325,6 +1325,8 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
       ),
     );
   }
+}
+
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
 
