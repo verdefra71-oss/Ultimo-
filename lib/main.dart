@@ -1136,6 +1136,7 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
   final _iva = TextEditingController(text: '0');
   final _cliente = TextEditingController();
   final _iban = TextEditingController();
+  String? cliente;
   String pagamento = 'Contanti';
   final List<Map<String, dynamic>> articoli = [];
   bool salvando = false;
