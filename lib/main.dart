@@ -1096,6 +1096,23 @@ class PdfGenerator {
           ),
           pw.SizedBox(height: 20),
           pw.Container(
+            width: double.infinity,
+            padding: const pw.EdgeInsets.all(10),
+            decoration: pw.BoxDecoration(border: pw.Border.all(color: PdfColor.fromHex('#D8C98A'))),
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Text('DATI AZIENDA', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: gold)),
+                pw.SizedBox(height: 4),
+                pw.Text('di CARPENTIERI ALFONSO', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                pw.Text('Sede legale: via Ugo Pirro, 9 - 84100 Salerno'),
+                pw.Text('Cell. 328 697 2865'),
+                pw.Text('P. IVA 06051430657'),
+              ],
+            ),
+          ),
+          pw.SizedBox(height: 10),
+          pw.Container(
             padding: const pw.EdgeInsets.all(10),
             decoration: pw.BoxDecoration(border: pw.Border.all(color: PdfColor.fromHex('#D8C98A'))),
             child: pw.Column(
