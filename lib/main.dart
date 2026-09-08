@@ -99,7 +99,7 @@ class DatabaseHelper {
 
     return openDatabase(
       p.join(dbPath, fileName),
-      version: 9,
+      version: 10,
       onCreate: (db, version) async {
         await db.execute('''
 CREATE TABLE clienti (
@@ -147,7 +147,8 @@ CREATE TABLE fatture (
   articoli TEXT NOT NULL DEFAULT '[]',
   iva_percent REAL NOT NULL DEFAULT 0,
   totale REAL NOT NULL DEFAULT 0,
-  pagamento TEXT NOT NULL DEFAULT 'Contanti'
+  pagamento TEXT NOT NULL DEFAULT 'Contanti',
+  iban TEXT
 )
 ''');
 
@@ -214,6 +215,9 @@ CREATE TABLE fatture (
   pagamento TEXT NOT NULL DEFAULT 'Contanti'
 )
 ''');
+        }
+        if (oldVersion < 10) {
+          await db.execute("ALTER TABLE fatture ADD COLUMN iban TEXT");
         }
       },
     );
@@ -365,6 +369,7 @@ CREATE TABLE fatture (
     required double ivaPercent,
     required double totale,
     required String pagamento,
+    String? iban,
   }) async {
     final id = await (await database).insert('fatture', {
       'numero': numero,
@@ -374,6 +379,7 @@ CREATE TABLE fatture (
       'iva_percent': ivaPercent,
       'totale': totale,
       'pagamento': pagamento,
+      'iban': iban,
     });
     await autoBackup();
     return id;
@@ -952,6 +958,7 @@ class PdfGenerator {
     required List<Map<String, dynamic>> articoli,
     required double ivaPercent,
     required String pagamento,
+    String? iban,
   }) async {
     final fontData = await rootBundle.load('assets/fonts/DejaVuSans.ttf');
     final boldFontData = await rootBundle.load('assets/fonts/DejaVuSans-Bold.ttf');
@@ -1038,7 +1045,7 @@ class PdfGenerator {
                     ),
                   pw.SizedBox(height: 6),
                   pw.Text(
-                    'FATTURA PROFORMA',
+                    'FATTURA',
                     style: pw.TextStyle(
                       fontSize: 20,
                       fontWeight: pw.FontWeight.bold,
@@ -1091,7 +1098,17 @@ class PdfGenerator {
           pw.Container(
             padding: const pw.EdgeInsets.all(10),
             decoration: pw.BoxDecoration(border: pw.Border.all(color: PdfColor.fromHex('#D8C98A'))),
-            child: pw.Text('Metodo di pagamento: $pagamento', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Text('Metodo di pagamento: $pagamento', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                if (pagamento == 'Bonifico' && (iban ?? '').trim().isNotEmpty)
+                  pw.Padding(
+                    padding: const pw.EdgeInsets.only(top: 4),
+                    child: pw.Text('IBAN: ${iban!.trim()}'),
+                  ),
+              ],
+            ),
           ),
         ],
       ),
@@ -1117,7 +1134,8 @@ class CreaFatturaScreen extends StatefulWidget {
 class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
   final _numero = TextEditingController();
   final _iva = TextEditingController(text: '0');
-  String? cliente;
+  final _cliente = TextEditingController();
+  final _iban = TextEditingController();
   String pagamento = 'Contanti';
   final List<Map<String, dynamic>> articoli = [];
   bool salvando = false;
@@ -1133,6 +1151,7 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
     final p = widget.preventivo;
     if (p != null) {
       cliente = (p['cliente'] ?? '').toString();
+      _cliente.text = cliente ?? '';
       _iva.text = ((p['iva_percent'] as num?)?.toDouble() ?? 0).toString();
       try {
         final raw = jsonDecode((p['articoli'] ?? '[]').toString());
@@ -1158,15 +1177,62 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
   double get totale => imponibile + imponibile * ivaPercent / 100;
 
   Future<void> _aggiungiProdotto() async {
-    final prodotto = await selezionaProdotto(context);
-    if (prodotto == null || !mounted) return;
-    setState(() {
-      articoli.add({
-        'nome': prodotto['nome'].toString(),
-        'prezzo': (prodotto['prezzo'] as num?)?.toDouble() ?? 0,
-        'quantita': 1,
-      });
-    });
+    final nome = TextEditingController();
+    final prezzo = TextEditingController();
+    final quantita = TextEditingController(text: '1');
+
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Aggiungi prodotto / servizio'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nome,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  labelText: 'Descrizione',
+                  hintText: 'Inserisci anche un materiale non presente in archivio',
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: prezzo,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Prezzo unitario €'),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: quantita,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Quantità'),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('ANNULLA')),
+          FilledButton(
+            onPressed: () {
+              final n = nome.text.trim();
+              final p = double.tryParse(prezzo.text.replaceAll(',', '.')) ?? 0;
+              final q = double.tryParse(quantita.text.replaceAll(',', '.')) ?? 1;
+              if (n.isEmpty || p < 0 || q <= 0) return;
+              Navigator.pop(ctx, {'nome': n, 'prezzo': p, 'quantita': q});
+            },
+            child: const Text('AGGIUNGI'),
+          ),
+        ],
+      ),
+    );
+    nome.dispose();
+    prezzo.dispose();
+    quantita.dispose();
+    if (result != null && mounted) {
+      setState(() => articoli.add(result));
+    }
   }
 
   Future<void> _salva() async {
@@ -1176,15 +1242,10 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
       );
       return;
     }
-    if ((cliente ?? '').trim().isEmpty) {
+    cliente = _cliente.text.trim();
+    if (pagamento == 'Bonifico' && _iban.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Seleziona un cliente.')),
-      );
-      return;
-    }
-    if (articoli.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Aggiungi almeno un prodotto o servizio.')),
+        const SnackBar(content: Text('Inserisci l\'IBAN per il pagamento con bonifico.')),
       );
       return;
     }
@@ -1199,6 +1260,7 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
         ivaPercent: ivaPercent,
         totale: totale,
         pagamento: pagamento,
+        iban: pagamento == 'Bonifico' ? _iban.text.trim() : null,
       );
       await PdfGenerator.generaECondividiFattura(
         numero: numero,
@@ -1206,6 +1268,7 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
         articoli: articoli,
         ivaPercent: ivaPercent,
         pagamento: pagamento,
+        iban: pagamento == 'Bonifico' ? _iban.text.trim() : null,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1227,6 +1290,8 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
   void dispose() {
     _numero.dispose();
     _iva.dispose();
+    _cliente.dispose();
+    _iban.dispose();
     super.dispose();
   }
 
@@ -1271,16 +1336,31 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.person_outline, color: darkGold),
-                    title: Text(cliente ?? 'Seleziona cliente'),
-                    subtitle: const Text('Cliente della fattura'),
-                    trailing: const Icon(Icons.chevron_right_rounded),
-                    onTap: () async {
-                      final c = await selezionaCliente(context);
-                      if (c != null) setState(() => cliente = c);
-                    },
+                  TextField(
+                    controller: _cliente,
+                    onChanged: (v) => cliente = v,
+                    decoration: const InputDecoration(
+                      labelText: 'Cliente',
+                      hintText: 'Inserisci il cliente oppure digita un nominativo',
+                      prefixIcon: Icon(Icons.person_outline, color: darkGold),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () async {
+                        final c = await selezionaCliente(context);
+                        if (c != null) {
+                          setState(() {
+                            cliente = c;
+                            _cliente.text = c;
+                          });
+                        }
+                      },
+                      icon: const Icon(Icons.search),
+                      label: const Text('Scegli dall\'archivio clienti (facoltativo)'),
+                    ),
                   ),
                 ],
               ),
@@ -1352,6 +1432,18 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
                     ],
                     onChanged: (v) => setState(() => pagamento = v ?? 'Contanti'),
                   ),
+                  if (pagamento == 'Bonifico') ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _iban,
+                      keyboardType: TextInputType.text,
+                      decoration: const InputDecoration(
+                        labelText: 'IBAN',
+                        hintText: 'Inserisci IBAN',
+                        prefixIcon: Icon(Icons.account_balance),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 16),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1516,6 +1608,7 @@ class _ListaFattureScreenState extends State<ListaFattureScreen> {
                       articoli: articoli,
                       ivaPercent: (f['iva_percent'] as num?)?.toDouble() ?? 0,
                       pagamento: f['pagamento'].toString(),
+                      iban: (f['iban'] ?? '').toString(),
                     );
                   },
                   icon: const Icon(Icons.picture_as_pdf),
