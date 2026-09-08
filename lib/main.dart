@@ -1061,9 +1061,6 @@ class PdfGenerator {
 
 }
 
-}
-
-
 class CreaFatturaScreen extends StatefulWidget {
   const CreaFatturaScreen({super.key});
 
