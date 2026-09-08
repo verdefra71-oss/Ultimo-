@@ -379,16 +379,6 @@ CREATE TABLE fatture (
     return id;
   }
 
-  Future<int> deleteFattura(int id) async {
-    final result = await (await database).delete(
-      'fatture',
-      where: 'id = ?',
-      whereArgs: [id],
-    );
-    await autoBackup();
-    return result;
-  }
-
   Future<String> prossimoNumeroFattura() async {
     final rows = await (await database).rawQuery('SELECT COUNT(*) AS n FROM fatture');
     final n = (rows.first['n'] as int? ?? 0) + 1;
@@ -527,19 +517,14 @@ CREATE TABLE fatture (
     final preventivi = List<Map<String, dynamic>>.from(
       (decoded['preventivi'] as List? ?? []).map((e) => Map<String, dynamic>.from(e)),
     );
-    final fatture = List<Map<String, dynamic>>.from(
-      (decoded['fatture'] as List? ?? []).map((e) => Map<String, dynamic>.from(e)),
-    );
     final db = await database;
     await db.transaction((txn) async {
       await txn.delete('preventivi');
       await txn.delete('prodotti');
       await txn.delete('clienti');
-      await txn.delete('fatture');
       for (final row in clienti) await txn.insert('clienti', row);
       for (final row in prodotti) await txn.insert('prodotti', row);
       for (final row in preventivi) await txn.insert('preventivi', row);
-      for (final row in fatture) await txn.insert('fatture', row);
     });
     await createAutomaticBackup();
   }
@@ -1014,41 +999,17 @@ class PdfGenerator {
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.fromLTRB(30, 28, 30, 28),
         build: (_) => [
+          if (logo != null)
+            pw.Center(child: pw.SizedBox(width: 190, height: 120, child: pw.Image(logo))),
+          pw.SizedBox(height: 8),
           pw.Row(
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
             mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
             children: [
-              if (logo != null)
-                pw.SizedBox(
-                  width: 285,
-                  height: 150,
-                  child: pw.Image(logo, fit: pw.BoxFit.contain),
-                )
-              else
-                pw.SizedBox(
-                  width: 285,
-                  height: 100,
-                  child: pw.Text(
-                    'BTS',
-                    style: pw.TextStyle(fontSize: 38, fontWeight: pw.FontWeight.bold),
-                  ),
-                ),
-              pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.end,
-                children: [
-                  pw.Text(
-                    'FATTURA PROFORMA',
-                    style: pw.TextStyle(
-                      fontSize: 24,
-                      fontWeight: pw.FontWeight.bold,
-                      color: gold,
-                    ),
-                  ),
-                  pw.SizedBox(height: 8),
-                  pw.Text('N. $numero', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
-                  pw.Text('Data: $data'),
-                ],
-              ),
+              pw.Text('FATTURA', style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold, color: gold)),
+              pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
+                pw.Text('N. $numero', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+                pw.Text('Data: $data'),
+              ]),
             ],
           ),
           pw.SizedBox(height: 18),
@@ -1101,9 +1062,7 @@ class PdfGenerator {
 }
 
 class CreaFatturaScreen extends StatefulWidget {
-  final Map<String, dynamic>? preventivo;
-
-  const CreaFatturaScreen({super.key, this.preventivo});
+  const CreaFatturaScreen({super.key});
 
   @override
   State<CreaFatturaScreen> createState() => _CreaFatturaScreenState();
@@ -1120,26 +1079,11 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
   @override
   void initState() {
     super.initState();
-    _precompila();
+    _precompilaNumero();
   }
 
-  Future<void> _precompila() async {
+  Future<void> _precompilaNumero() async {
     _numero.text = await DatabaseHelper.instance.prossimoNumeroFattura();
-    final p = widget.preventivo;
-    if (p != null) {
-      cliente = (p['cliente'] ?? '').toString();
-      _iva.text = ((p['iva_percent'] as num?)?.toDouble() ?? 0).toString();
-      try {
-        final raw = jsonDecode((p['articoli'] ?? '[]').toString());
-        if (raw is List) {
-          articoli.addAll(raw.map((e) => {
-            'nome': (e['nome'] ?? '').toString(),
-            'prezzo': (e['prezzo'] as num?)?.toDouble() ?? 0,
-            'quantita': (e['quantita'] as num?)?.toDouble() ?? 1,
-          }));
-        }
-      } catch (_) {}
-    }
     if (mounted) setState(() {});
   }
 
@@ -1231,7 +1175,7 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
     const darkGold = Color(0xFF9A7000);
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.preventivo == null ? 'Crea fattura' : 'Fattura da preventivo'),
+        title: const Text('Crea fattura'),
         actions: [
           IconButton(
             tooltip: 'Salva fattura',
@@ -1243,15 +1187,6 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(14, 14, 14, 30),
         children: [
-          if (widget.preventivo != null)
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.description_outlined),
-                title: const Text('Creata dal preventivo'),
-                subtitle: Text((widget.preventivo!['numero'] ?? '').toString()),
-              ),
-            ),
-          if (widget.preventivo != null) const SizedBox(height: 10),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -1387,189 +1322,6 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
             label: const Text('CREA FATTURA E PDF'),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class ListaFattureScreen extends StatefulWidget {
-  const ListaFattureScreen({super.key});
-
-  @override
-  State<ListaFattureScreen> createState() => _ListaFattureScreenState();
-}
-
-class _ListaFattureScreenState extends State<ListaFattureScreen> {
-  final _search = TextEditingController();
-  List<Map<String, dynamic>> fatture = [];
-  bool loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _search.addListener(() => setState(() {}));
-    _carica();
-  }
-
-  @override
-  void dispose() {
-    _search.dispose();
-    super.dispose();
-  }
-
-  Future<void> _carica() async {
-    setState(() => loading = true);
-    final dati = await DatabaseHelper.instance.getFatture();
-    if (!mounted) return;
-    setState(() {
-      fatture = dati;
-      loading = false;
-    });
-  }
-
-  List<Map<String, dynamic>> get filtrate {
-    final q = _search.text.trim().toLowerCase();
-    if (q.isEmpty) return fatture;
-    return fatture.where((f) =>
-      (f['numero'] ?? '').toString().toLowerCase().contains(q) ||
-      (f['cliente'] ?? '').toString().toLowerCase().contains(q)
-    ).toList();
-  }
-
-  List<Map<String, dynamic>> _articoli(Map<String, dynamic> f) {
-    try {
-      final raw = jsonDecode((f['articoli'] ?? '[]').toString());
-      if (raw is! List) return [];
-      return raw.map((e) => {
-        'nome': (e['nome'] ?? '').toString(),
-        'prezzo': (e['prezzo'] as num?)?.toDouble() ?? 0,
-        'quantita': (e['quantita'] as num?)?.toDouble() ?? 1,
-      }).toList();
-    } catch (_) {
-      return [];
-    }
-  }
-
-  Future<void> _elimina(Map<String, dynamic> f) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Eliminare la fattura?'),
-        content: Text('${f['numero']}\n${f['cliente']}'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('ANNULLA')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('ELIMINA')),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    await DatabaseHelper.instance.deleteFattura((f['id'] as num).toInt());
-    await _carica();
-  }
-
-  void _mostra(Map<String, dynamic> f) {
-    final data = DateTime.tryParse((f['data'] ?? '').toString()) ?? DateTime.now();
-    final articoli = _articoli(f);
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 18, 18, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(children: [
-                const CircleAvatar(child: Icon(Icons.receipt_long)),
-                const SizedBox(width: 12),
-                Expanded(child: Text((f['numero'] ?? '').toString(), style: const TextStyle(fontSize: 21, fontWeight: FontWeight.bold))),
-                IconButton(onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.close)),
-              ]),
-              const Divider(height: 24),
-              ListTile(contentPadding: EdgeInsets.zero, leading: const Icon(Icons.person_outline), title: const Text('Cliente'), subtitle: Text((f['cliente'] ?? '').toString())),
-              ListTile(contentPadding: EdgeInsets.zero, leading: const Icon(Icons.calendar_today_outlined), title: const Text('Data'), subtitle: Text(DateFormat('dd/MM/yyyy').format(data))),
-              ListTile(contentPadding: EdgeInsets.zero, leading: const Icon(Icons.payments_outlined), title: const Text('Totale'), subtitle: Text('€ ${((f['totale'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}')),
-              if (articoli.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                const Text('Articoli', style: TextStyle(fontWeight: FontWeight.w800)),
-                const SizedBox(height: 4),
-                ...articoli.map((a) => ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(a['nome'].toString()),
-                  trailing: Text('${((a['prezzo'] as num).toDouble() * (a['quantita'] as num).toDouble()).toStringAsFixed(2)} €'),
-                )),
-              ],
-              const SizedBox(height: 8),
-              Row(children: [
-                Expanded(child: FilledButton.icon(
-                  onPressed: () async {
-                    await PdfGenerator.generaECondividiFattura(
-                      numero: f['numero'].toString(),
-                      cliente: f['cliente'].toString(),
-                      articoli: articoli,
-                      ivaPercent: (f['iva_percent'] as num?)?.toDouble() ?? 0,
-                      pagamento: f['pagamento'].toString(),
-                    );
-                  },
-                  icon: const Icon(Icons.picture_as_pdf),
-                  label: const Text('PDF'),
-                )),
-                const SizedBox(width: 10),
-                OutlinedButton.icon(onPressed: () async { Navigator.pop(ctx); await _elimina(f); }, icon: const Icon(Icons.delete_outline), label: const Text('ELIMINA')),
-              ]),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final items = filtrate;
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Fatture'),
-        actions: [
-          IconButton(onPressed: _carica, icon: const Icon(Icons.refresh_rounded)),
-          IconButton(onPressed: () async {
-            await Navigator.push(context, MaterialPageRoute(builder: (_) => const CreaFatturaScreen()));
-            _carica();
-          }, icon: const Icon(Icons.add_rounded)),
-        ],
-      ),
-      body: RefreshIndicator(
-        onRefresh: _carica,
-        child: loading
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.fromLTRB(14, 14, 14, 24),
-              children: [
-                TextField(
-                  controller: _search,
-                  decoration: const InputDecoration(prefixIcon: Icon(Icons.search), labelText: 'Cerca fattura o cliente'),
-                ),
-                const SizedBox(height: 12),
-                if (items.isEmpty)
-                  const Padding(padding: EdgeInsets.all(30), child: Center(child: Text('Nessuna fattura salvata.')))
-                else
-                  ...items.map((f) {
-                    final data = DateTime.tryParse((f['data'] ?? '').toString()) ?? DateTime.now();
-                    return Card(
-                      child: ListTile(
-                        leading: const CircleAvatar(child: Icon(Icons.receipt_long_rounded)),
-                        title: Text((f['numero'] ?? '').toString(), style: const TextStyle(fontWeight: FontWeight.w800)),
-                        subtitle: Text('${f['cliente']}\n${DateFormat('dd/MM/yyyy').format(data)} • ${f['pagamento']}'),
-                        isThreeLine: true,
-                        trailing: Text('€ ${((f['totale'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold)),
-                        onTap: () => _mostra(f),
-                      ),
-                    );
-                  }),
-              ],
-            ),
       ),
     );
   }
@@ -1727,12 +1479,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   'Preventivi',
                   preventivi,
                   () => apri(const ListaPreventiviScreen()),
-                ),
-                _statCard(
-                  Icons.receipt_long_rounded,
-                  'Fatture',
-                  fatture,
-                  () => apri(const ListaFattureScreen()),
                 ),
                 _statCard(
                   Icons.people_alt_rounded,
@@ -2809,24 +2555,6 @@ class _ListaPreventiviScreenState extends State<ListaPreventiviScreen> {
                     ),
                   ),
                 ],
-              ),
-              const SizedBox(height: 10),
-              SizedBox(
-                width: double.infinity,
-                height: 48,
-                child: FilledButton.icon(
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => CreaFatturaScreen(preventivo: x),
-                      ),
-                    );
-                  },
-                  icon: const Icon(Icons.receipt_long_rounded),
-                  label: const Text('CREA FATTURA DA PREVENTIVO'),
-                ),
               ),
               const SizedBox(height: 10),
               SizedBox(
