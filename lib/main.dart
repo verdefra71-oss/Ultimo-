@@ -773,10 +773,13 @@ class PdfGenerator {
               crossAxisAlignment: pw.CrossAxisAlignment.end,
               children: [
                 pw.Text('Imponibile: € ${imponibile.toStringAsFixed(2)}'),
-                if (scontoPercent > 0)
-                  pw.Text('Sconto ${scontoPercent.toStringAsFixed(0)}%: -€ ${sconto.toStringAsFixed(2)}',
-                    style: pw.TextStyle(color: gold, fontWeight: pw.FontWeight.bold)),
-                pw.Text('Imponibile scontato: € ${imponibileScontato.toStringAsFixed(2)}'),
+                if (scontoPercent > 0) ...[
+                  pw.Text(
+                    'Sconto ${scontoPercent.toStringAsFixed(0)}%: -€ ${sconto.toStringAsFixed(2)}',
+                    style: pw.TextStyle(color: gold, fontWeight: pw.FontWeight.bold),
+                  ),
+                  pw.Text('Imponibile scontato: € ${imponibileScontato.toStringAsFixed(2)}'),
+                ],
                 if (ivaPercent == 0)
                   pw.Text(
                     'FUORI CAMPO IVA FCI',
