@@ -1014,17 +1014,41 @@ class PdfGenerator {
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.fromLTRB(30, 28, 30, 28),
         build: (_) => [
-          if (logo != null)
-            pw.Center(child: pw.SizedBox(width: 190, height: 120, child: pw.Image(logo))),
-          pw.SizedBox(height: 8),
           pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
             mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
             children: [
-              pw.Text('FATTURA', style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold, color: gold)),
-              pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
-                pw.Text('N. $numero', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
-                pw.Text('Data: $data'),
-              ]),
+              if (logo != null)
+                pw.SizedBox(
+                  width: 285,
+                  height: 150,
+                  child: pw.Image(logo, fit: pw.BoxFit.contain),
+                )
+              else
+                pw.SizedBox(
+                  width: 285,
+                  height: 100,
+                  child: pw.Text(
+                    'BTS',
+                    style: pw.TextStyle(fontSize: 38, fontWeight: pw.FontWeight.bold),
+                  ),
+                ),
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.end,
+                children: [
+                  pw.Text(
+                    'FATTURA PROFORMA',
+                    style: pw.TextStyle(
+                      fontSize: 24,
+                      fontWeight: pw.FontWeight.bold,
+                      color: gold,
+                    ),
+                  ),
+                  pw.SizedBox(height: 8),
+                  pw.Text('N. $numero', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+                  pw.Text('Data: $data'),
+                ],
+              ),
             ],
           ),
           pw.SizedBox(height: 18),
