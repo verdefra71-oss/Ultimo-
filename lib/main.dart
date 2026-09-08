@@ -930,6 +930,137 @@ class PdfGenerator {
       filename: '${accettato ? 'Ricevuta' : 'Preventivo'}_$numero.pdf',
     );
   }
+
+  static Future<void> generaECondividiFattura({
+    required String numero,
+    required String cliente,
+    required List<Map<String, dynamic>> articoli,
+    required double ivaPercent,
+    required String pagamento,
+  }) async {
+    final fontData = await rootBundle.load('assets/fonts/DejaVuSans.ttf');
+    final boldFontData = await rootBundle.load('assets/fonts/DejaVuSans-Bold.ttf');
+    final pdf = pw.Document(
+      theme: pw.ThemeData.withFont(
+        base: pw.Font.ttf(fontData),
+        bold: pw.Font.ttf(boldFontData),
+      ),
+    );
+    pw.MemoryImage? logo;
+    Map<String, dynamic>? datiCliente;
+    try {
+      final bytes = await rootBundle.load('assets/logo.png');
+      logo = pw.MemoryImage(Uint8List.fromList(bytes.buffer.asUint8List()));
+    } catch (_) {}
+    try {
+      final clienti = await DatabaseHelper.instance.getClienti();
+      final matches = clienti.where(
+        (c) => (c['nome'] ?? '').toString().trim() == cliente.trim(),
+      );
+      if (matches.isNotEmpty) datiCliente = Map<String, dynamic>.from(matches.first);
+    } catch (_) {}
+
+    final imponibile = articoli.fold<double>(0, (sum, x) {
+      final prezzo = (x['prezzo'] as num?)?.toDouble() ?? 0;
+      final quantita = (x['quantita'] as num?)?.toDouble() ?? 1;
+      return sum + prezzo * quantita;
+    });
+    final iva = imponibile * ivaPercent / 100;
+    final totale = imponibile + iva;
+    final data = DateFormat('dd/MM/yyyy').format(DateTime.now());
+    final gold = PdfColor.fromHex('#B8860B');
+
+    String value(String key) => (datiCliente?[key] ?? '').toString().trim();
+
+    final rows = <pw.TableRow>[
+      pw.TableRow(
+        decoration: pw.BoxDecoration(color: PdfColor.fromHex('#F7F1DC')),
+        children: [
+          pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text('Descrizione', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+          pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text('Qtà', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+          pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text('Prezzo', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+          pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text('Totale', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+        ],
+      ),
+    ];
+    for (final a in articoli) {
+      final prezzo = (a['prezzo'] as num?)?.toDouble() ?? 0;
+      final q = (a['quantita'] as num?)?.toDouble() ?? 1;
+      rows.add(pw.TableRow(children: [
+        pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text((a['nome'] ?? '').toString())),
+        pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text(q.toStringAsFixed(q == q.roundToDouble() ? 0 : 2))),
+        pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text('${prezzo.toStringAsFixed(2)} €')),
+        pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text('${(prezzo*q).toStringAsFixed(2)} €')),
+      ]));
+    }
+
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.fromLTRB(30, 28, 30, 28),
+        build: (_) => [
+          if (logo != null)
+            pw.Center(child: pw.SizedBox(width: 190, height: 120, child: pw.Image(logo))),
+          pw.SizedBox(height: 8),
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            children: [
+              pw.Text('FATTURA', style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold, color: gold)),
+              pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
+                pw.Text('N. $numero', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+                pw.Text('Data: $data'),
+              ]),
+            ],
+          ),
+          pw.SizedBox(height: 18),
+          pw.Text('CLIENTE', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: gold)),
+          pw.SizedBox(height: 4),
+          pw.Text(cliente, style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+          if (value('indirizzo').isNotEmpty) pw.Text('Indirizzo: ${value('indirizzo')}'),
+          if (value('telefono').isNotEmpty) pw.Text('Telefono: ${value('telefono')}'),
+          if (value('email').isNotEmpty) pw.Text('Email: ${value('email')}'),
+          if (value('partita_iva').isNotEmpty) pw.Text('Partita IVA: ${value('partita_iva')}'),
+          if (value('codice_fiscale').isNotEmpty) pw.Text('Codice Fiscale: ${value('codice_fiscale')}'),
+          pw.SizedBox(height: 20),
+          pw.Table(
+            border: pw.TableBorder.all(color: PdfColor.fromHex('#D8C98A')),
+            columnWidths: {0: const pw.FlexColumnWidth(4), 1: const pw.FlexColumnWidth(1), 2: const pw.FlexColumnWidth(1.5), 3: const pw.FlexColumnWidth(1.7)},
+            children: rows,
+          ),
+          pw.SizedBox(height: 18),
+          pw.Align(
+            alignment: pw.Alignment.centerRight,
+            child: pw.Container(
+              width: 220,
+              child: pw.Column(children: [
+                pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [pw.Text('Imponibile'), pw.Text('${imponibile.toStringAsFixed(2)} €')]),
+                pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [pw.Text('IVA ${ivaPercent.toStringAsFixed(2)}%'), pw.Text('${iva.toStringAsFixed(2)} €')]),
+                pw.Divider(color: gold),
+                pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
+                  pw.Text('TOTALE', style: pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold)),
+                  pw.Text('${totale.toStringAsFixed(2)} €', style: pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold, color: gold)),
+                ]),
+              ]),
+            ),
+          ),
+          pw.SizedBox(height: 20),
+          pw.Container(
+            padding: const pw.EdgeInsets.all(10),
+            decoration: pw.BoxDecoration(border: pw.Border.all(color: PdfColor.fromHex('#D8C98A'))),
+            child: pw.Text('Metodo di pagamento: $pagamento', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+
+    await Printing.sharePdf(
+      bytes: await pdf.save(),
+      filename: 'Fattura_$numero.pdf',
+    );
+  }
+
+}
+
 }
 
 
@@ -1197,136 +1328,6 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
       ),
     );
   }
-  static Future<void> generaECondividiFattura({
-    required String numero,
-    required String cliente,
-    required List<Map<String, dynamic>> articoli,
-    required double ivaPercent,
-    required String pagamento,
-  }) async {
-    final fontData = await rootBundle.load('assets/fonts/DejaVuSans.ttf');
-    final boldFontData = await rootBundle.load('assets/fonts/DejaVuSans-Bold.ttf');
-    final pdf = pw.Document(
-      theme: pw.ThemeData.withFont(
-        base: pw.Font.ttf(fontData),
-        bold: pw.Font.ttf(boldFontData),
-      ),
-    );
-    pw.MemoryImage? logo;
-    Map<String, dynamic>? datiCliente;
-    try {
-      final bytes = await rootBundle.load('assets/logo.png');
-      logo = pw.MemoryImage(Uint8List.fromList(bytes.buffer.asUint8List()));
-    } catch (_) {}
-    try {
-      final clienti = await DatabaseHelper.instance.getClienti();
-      final matches = clienti.where(
-        (c) => (c['nome'] ?? '').toString().trim() == cliente.trim(),
-      );
-      if (matches.isNotEmpty) datiCliente = Map<String, dynamic>.from(matches.first);
-    } catch (_) {}
-
-    final imponibile = articoli.fold<double>(0, (sum, x) {
-      final prezzo = (x['prezzo'] as num?)?.toDouble() ?? 0;
-      final quantita = (x['quantita'] as num?)?.toDouble() ?? 1;
-      return sum + prezzo * quantita;
-    });
-    final iva = imponibile * ivaPercent / 100;
-    final totale = imponibile + iva;
-    final data = DateFormat('dd/MM/yyyy').format(DateTime.now());
-    final gold = PdfColor.fromHex('#B8860B');
-
-    String value(String key) => (datiCliente?[key] ?? '').toString().trim();
-
-    final rows = <pw.TableRow>[
-      pw.TableRow(
-        decoration: pw.BoxDecoration(color: PdfColor.fromHex('#F7F1DC')),
-        children: [
-          pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text('Descrizione', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
-          pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text('Qtà', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
-          pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text('Prezzo', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
-          pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text('Totale', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
-        ],
-      ),
-    ];
-    for (final a in articoli) {
-      final prezzo = (a['prezzo'] as num?)?.toDouble() ?? 0;
-      final q = (a['quantita'] as num?)?.toDouble() ?? 1;
-      rows.add(pw.TableRow(children: [
-        pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text((a['nome'] ?? '').toString())),
-        pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text(q.toStringAsFixed(q == q.roundToDouble() ? 0 : 2))),
-        pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text('${prezzo.toStringAsFixed(2)} €')),
-        pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text('${(prezzo*q).toStringAsFixed(2)} €')),
-      ]));
-    }
-
-    pdf.addPage(
-      pw.MultiPage(
-        pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.fromLTRB(30, 28, 30, 28),
-        build: (_) => [
-          if (logo != null)
-            pw.Center(child: pw.SizedBox(width: 190, height: 120, child: logo)),
-          pw.SizedBox(height: 8),
-          pw.Row(
-            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-            children: [
-              pw.Text('FATTURA', style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold, color: gold)),
-              pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
-                pw.Text('N. $numero', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
-                pw.Text('Data: $data'),
-              ]),
-            ],
-          ),
-          pw.SizedBox(height: 18),
-          pw.Text('CLIENTE', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: gold)),
-          pw.SizedBox(height: 4),
-          pw.Text(cliente, style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
-          if (value('indirizzo').isNotEmpty) pw.Text('Indirizzo: ${value('indirizzo')}'),
-          if (value('telefono').isNotEmpty) pw.Text('Telefono: ${value('telefono')}'),
-          if (value('email').isNotEmpty) pw.Text('Email: ${value('email')}'),
-          if (value('partita_iva').isNotEmpty) pw.Text('Partita IVA: ${value('partita_iva')}'),
-          if (value('codice_fiscale').isNotEmpty) pw.Text('Codice Fiscale: ${value('codice_fiscale')}'),
-          pw.SizedBox(height: 20),
-          pw.Table(
-            border: pw.TableBorder.all(color: PdfColor.fromHex('#D8C98A')),
-            columnWidths: {0: const pw.FlexColumnWidth(4), 1: const pw.FlexColumnWidth(1), 2: const pw.FlexColumnWidth(1.5), 3: const pw.FlexColumnWidth(1.7)},
-            children: rows,
-          ),
-          pw.SizedBox(height: 18),
-          pw.Align(
-            alignment: pw.Alignment.centerRight,
-            child: pw.Container(
-              width: 220,
-              child: pw.Column(children: [
-                pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [pw.Text('Imponibile'), pw.Text('${imponibile.toStringAsFixed(2)} €')]),
-                pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [pw.Text('IVA ${ivaPercent.toStringAsFixed(2)}%'), pw.Text('${iva.toStringAsFixed(2)} €')]),
-                pw.Divider(color: gold),
-                pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
-                  pw.Text('TOTALE', style: pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold)),
-                  pw.Text('${totale.toStringAsFixed(2)} €', style: pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold, color: gold)),
-                ]),
-              ]),
-            ),
-          ),
-          pw.SizedBox(height: 20),
-          pw.Container(
-            padding: const pw.EdgeInsets.all(10),
-            decoration: pw.BoxDecoration(border: pw.Border.all(color: PdfColor.fromHex('#D8C98A'))),
-            child: pw.Text('Metodo di pagamento: $pagamento', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-          ),
-        ],
-      ),
-    );
-
-    await Printing.sharePdf(
-      bytes: await pdf.save(),
-      filename: 'Fattura_$numero.pdf',
-    );
-  }
-
-}
-
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
 
