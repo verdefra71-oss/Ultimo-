@@ -1016,6 +1016,414 @@ class PdfGenerator {
 }
 
 
+class DashboardScreen extends StatefulWidget {
+  const DashboardScreen({super.key});
+
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  int preventivi = 0;
+  int clienti = 0;
+  int prodotti = 0;
+  int rate = 0;
+  bool loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    caricaStatistiche();
+  }
+
+  Future<void> caricaStatistiche() async {
+    final db = DatabaseHelper.instance;
+
+    final results = await Future.wait([
+      db.getPreventivi(),
+      db.getClienti(),
+      db.getProdotti(),
+      db.getRate(),
+    ]);
+
+    if (!mounted) return;
+
+    setState(() {
+      preventivi = results[0].length;
+      clienti = results[1].length;
+      prodotti = results[2].length;
+      rate = results[3].length;
+      loading = false;
+    });
+  }
+
+  Future<void> apri(Widget pagina) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => pagina),
+    );
+    caricaStatistiche();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Preventivi',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        centerTitle: true,
+        backgroundColor: primary,
+        foregroundColor: Colors.white,
+      ),
+      body: RefreshIndicator(
+        onRefresh: caricaStatistiche,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Card(
+              color: primary,
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: Image.asset(
+                        'assets/logo.png',
+                        width: double.infinity,
+                        height: 150,
+                        fit: BoxFit.contain,
+                        filterQuality: FilterQuality.high,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Gestione Preventivi',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 25,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    const Text(
+                      'Crea, salva e condividi i tuoi preventivi.',
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                    const SizedBox(height: 18),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: primary,
+                        ),
+                        onPressed: () =>
+                            apri(const NuovoPreventivoScreen()),
+                        icon: const Icon(Icons.add),
+                        label: const Text(
+                          'NUOVO PREVENTIVO',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: _statCard(
+                    Icons.receipt_long,
+                    'Preventivi',
+                    preventivi,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _statCard(
+                    Icons.people_alt_outlined,
+                    'Clienti',
+                    clienti,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: _statCard(
+                    Icons.inventory_2_outlined,
+                    'Prodotti',
+                    prodotti,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _statCard(
+                    Icons.payments_outlined,
+                    'Rate',
+                    rate,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Gestione',
+              style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 10),
+            _menuTile(
+              Icons.receipt_long,
+              'Lista preventivi',
+              'Visualizza i preventivi salvati',
+              () => apri(const ListaPreventiviScreen()),
+            ),
+            _menuTile(
+              Icons.people_alt_outlined,
+              'Clienti',
+              'Gestisci l’anagrafica clienti',
+              () => apri(const ClientiScreen()),
+            ),
+            _menuTile(
+              Icons.inventory_2_outlined,
+              'Prodotti / Servizi',
+              'Gestisci prodotti e prezzi',
+              () => apri(const ProdottiScreen()),
+            ),
+            _menuTile(
+              Icons.payments_outlined,
+              'Rate e scadenze',
+              'Controlla le rate programmate',
+              () => apri(const RateScreen()),
+            ),
+            _menuTile(
+              Icons.backup_outlined,
+              'Backup e dati',
+              'Esporta, importa e gestisci il backup',
+              () => apri(const BackupScreen()),
+            ),
+            _menuTile(
+              Icons.notifications_active_outlined,
+              'Notifiche',
+              'Abilita gli avvisi delle scadenze',
+              () => apri(const NotificheScreen()),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _statCard(IconData icon, String label, int value) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
+        child: Column(
+          children: [
+            Icon(
+              icon,
+              size: 30,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+            const SizedBox(height: 7),
+            Text(
+              loading ? '…' : '$value',
+              style: const TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            Text(label),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _menuTile(
+    IconData icon,
+    String title,
+    String subtitle,
+    VoidCallback onTap,
+  ) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 9),
+      child: ListTile(
+        leading: CircleAvatar(child: Icon(icon)),
+        title: Text(
+          title,
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Text(subtitle),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: onTap,
+      ),
+    );
+  }
+}
+
+
+
+Future<String?> selezionaCliente(BuildContext context) async {
+  final clienti = await DatabaseHelper.instance.getClienti();
+  if (!context.mounted) return null;
+  return showDialog<String>(
+    context: context,
+    builder: (dialogContext) {
+      String query = '';
+      return StatefulBuilder(
+        builder: (context, setDialogState) {
+          final filtrati = clienti.where((c) {
+            final q = query.toLowerCase();
+            final nome = (c['nome'] ?? '').toString().toLowerCase();
+            final piva = (c['partita_iva'] ?? '').toString().toLowerCase();
+            final cf = (c['codice_fiscale'] ?? '').toString().toLowerCase();
+            return nome.contains(q) || piva.contains(q) || cf.contains(q);
+          }).toList();
+          return AlertDialog(
+            title: const Text('Seleziona cliente'),
+            content: SizedBox(
+              width: double.maxFinite,
+              height: 420,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    autofocus: true,
+                    onChanged: (v) => setDialogState(() => query = v),
+                    decoration: const InputDecoration(
+                      labelText: 'Cerca cliente',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Flexible(
+                    child: filtrati.isEmpty
+                        ? const Padding(
+                            padding: EdgeInsets.all(20),
+                            child: Text('Nessun cliente trovato.'),
+                          )
+                        : ListView.builder(
+                            shrinkWrap: true,
+                            itemCount: filtrati.length,
+                            itemBuilder: (_, i) => ListTile(
+                              leading: const CircleAvatar(
+                                child: Icon(Icons.person_outline),
+                              ),
+                              title: Text(filtrati[i]['nome']),
+                              subtitle: Text(
+                                [
+                                  filtrati[i]['telefono'],
+                                  filtrati[i]['email'],
+                                ]
+                                    .where((x) => (x ?? '').toString().isNotEmpty)
+                                    .join(' • '),
+                              ),
+                              onTap: () => Navigator.pop(
+                                dialogContext,
+                                filtrati[i]['nome'].toString(),
+                              ),
+                            ),
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('ANNULLA'),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+}
+
+Future<Map<String, dynamic>?> selezionaProdotto(BuildContext context) async {
+  final prodotti = await DatabaseHelper.instance.getProdotti();
+  if (!context.mounted) return null;
+  return showDialog<Map<String, dynamic>>(
+    context: context,
+    builder: (dialogContext) {
+      String query = '';
+      return StatefulBuilder(
+        builder: (context, setDialogState) {
+          final filtrati = prodotti.where((p) {
+            final nome = (p['nome'] ?? '').toString().toLowerCase();
+            return nome.contains(query.toLowerCase());
+          }).toList();
+          return AlertDialog(
+            title: const Text('Seleziona prodotto / servizio'),
+            content: SizedBox(
+              width: double.maxFinite,
+              height: 420,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    autofocus: true,
+                    onChanged: (v) => setDialogState(() => query = v),
+                    decoration: const InputDecoration(
+                      labelText: 'Cerca servizio',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Flexible(
+                    child: filtrati.isEmpty
+                        ? const Padding(
+                            padding: EdgeInsets.all(20),
+                            child: Text('Nessun servizio trovato.'),
+                          )
+                        : ListView.builder(
+                            shrinkWrap: true,
+                            itemCount: filtrati.length,
+                            itemBuilder: (_, i) => ListTile(
+                              leading: const Icon(Icons.inventory_2_outlined),
+                              title: Text(filtrati[i]['nome']),
+                              trailing: Text(
+                                '€ ${(filtrati[i]['prezzo'] as num).toDouble().toStringAsFixed(2)}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              onTap: () => Navigator.pop(
+                                dialogContext,
+                                Map<String, dynamic>.from(filtrati[i]),
+                              ),
+                            ),
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('ANNULLA'),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+}
+
+
 class NuovoPreventivoScreen extends StatefulWidget {
   const NuovoPreventivoScreen({super.key});
 
@@ -1028,6 +1436,8 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
   final prodottoController = TextEditingController();
   final prezzoController = TextEditingController();
   final quantitaController = TextEditingController(text: '1');
+
+  String get cliente => clienteController.text.trim();
 
   final List<Map<String, dynamic>> articoli = [];
 
@@ -2235,6 +2645,8 @@ class _ModificaPreventivoScreenState
   final prodottoController = TextEditingController();
   final prezzoController = TextEditingController();
   final quantitaController = TextEditingController(text: '1');
+
+  String get cliente => clienteController.text.trim();
   late final TextEditingController scontoController;
 
   late List<Map<String, dynamic>> articoli;
