@@ -819,9 +819,19 @@ class PdfGenerator {
                     'Totale acconti: € ${acconti.fold<double>(0, (s, a) => s + ((a['importo'] as num?)?.toDouble() ?? 0)).toStringAsFixed(2)}',
                     style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
                   ),
-                  pw.Text(
-                    'Saldo residuo: € ${(totale - acconti.fold<double>(0, (s, a) => s + ((a['importo'] as num?)?.toDouble() ?? 0))).toStringAsFixed(2)}',
-                  ),
+                  (() {
+                    final saldo = totale -
+                        acconti.fold<double>(
+                          0,
+                          (s, a) =>
+                              s + ((a['importo'] as num?)?.toDouble() ?? 0),
+                        );
+                    return pw.Text(
+                      saldo <= 0.005
+                          ? 'Saldo residuo: SALDATO'
+                          : 'Saldo residuo: € ${saldo.toStringAsFixed(2)}',
+                    );
+                  })(),
                 ],
               ),
             ),
@@ -2272,6 +2282,18 @@ Future<void> aggiungiAcconto() async {
       final db = DatabaseHelper.instance;
       final numero = await db.prossimoNumeroPreventivo();
 
+      // Se gli acconti coprono interamente il totale, il saldo è azzerato:
+      // gli acconti vengono rimossi anche dalla sezione Acconti.
+      final accontiDaSalvare = List<Map<String, dynamic>>.from(acconti);
+      final totaleAcconti = accontiDaSalvare.fold<double>(
+        0,
+        (sum, a) => sum + ((a['importo'] as num?)?.toDouble() ?? 0),
+      );
+      if (totale - totaleAcconti <= 0.005) {
+        accontiDaSalvare.clear();
+        acconti = [];
+      }
+
       final id = await db.insertPreventivo(
         numero: numero,
         cliente: cliente,
@@ -2279,7 +2301,7 @@ Future<void> aggiungiAcconto() async {
         articoli: articoli,
         ivaPercent: ivaPercent,
         accettato: accettato,
-        acconti: acconti,
+        acconti: accontiDaSalvare,
         scontoPercent: scontoPercent,
       );
 
@@ -3263,6 +3285,16 @@ Future<void> aggiungiAcconto() async {
             ...aggiunti,
           ];
 
+          // Se gli acconti azzerano il saldo, rimuovili completamente
+          // dalla sezione Acconti e dal database.
+          final totaleAccontiNuovo = nuovaLista.fold<double>(
+            0,
+            (sum, a) => sum + ((a['importo'] as num?)?.toDouble() ?? 0),
+          );
+          if (totale - totaleAccontiNuovo <= 0.005) {
+            nuovaLista.clear();
+          }
+
           // Salvataggio diretto degli acconti: non dipende dalla generazione
           // del PDF e non riscrive gli altri dati del preventivo.
           final updated = await DatabaseHelper.instance.updateAccontiPreventivo(
@@ -3395,6 +3427,15 @@ Future<void> aggiungiAcconto() async {
       final db = DatabaseHelper.instance;
       final preventivoId =
           (widget.preventivo['id'] as num).toInt();
+
+      // Se il saldo è stato azzerato, elimina tutti gli acconti.
+      final totaleAcconti = acconti.fold<double>(
+        0,
+        (sum, a) => sum + ((a['importo'] as num?)?.toDouble() ?? 0),
+      );
+      if (totale - totaleAcconti <= 0.005) {
+        acconti = [];
+      }
 
       final updated = await db.updatePreventivo(
         id: preventivoId,
