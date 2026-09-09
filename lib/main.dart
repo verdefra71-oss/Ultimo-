@@ -2795,38 +2795,6 @@ Future<void> aggiungiAcconto() async {
             const SizedBox(height: 12),
             Card(
               child: CheckboxListTile(
-                value: pagato,
-                onChanged: (v) => setState(() => pagato = v ?? false),
-                title: const Text(
-                  'Pagato',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-                subtitle: const Text(
-                  'Considera il preventivo completamente pagato e bypassa il calcolo degli acconti.',
-                ),
-                secondary: const Icon(Icons.paid_outlined),
-                controlAffinity: ListTileControlAffinity.leading,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Card(
-              child: CheckboxListTile(
-                value: pagato,
-                onChanged: (v) => setState(() => pagato = v ?? false),
-                title: const Text(
-                  'Pagato',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-                subtitle: const Text(
-                  'Considera il preventivo completamente pagato e bypassa il calcolo degli acconti.',
-                ),
-                secondary: const Icon(Icons.paid_outlined),
-                controlAffinity: ListTileControlAffinity.leading,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Card(
-              child: CheckboxListTile(
                 value: accettato,
                 onChanged: (v) => setState(() => accettato = v ?? false),
                 title: const Text(
