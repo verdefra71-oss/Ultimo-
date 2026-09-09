@@ -95,7 +95,7 @@ class DatabaseHelper {
 
     return openDatabase(
       p.join(dbPath, fileName),
-      version: 10,
+      version: 11,
       onCreate: (db, version) async {
         await db.execute('''
 CREATE TABLE clienti (
@@ -130,7 +130,8 @@ CREATE TABLE preventivi (
   iva_percent REAL NOT NULL DEFAULT 0,
   accettato INTEGER NOT NULL DEFAULT 0,
   acconti TEXT NOT NULL DEFAULT '[]',
-  sconto_percent REAL NOT NULL DEFAULT 0
+  sconto_percent REAL NOT NULL DEFAULT 0,
+  pagato INTEGER NOT NULL DEFAULT 0
 )
 ''');
 
@@ -214,6 +215,9 @@ CREATE TABLE fatture (
         }
         if (oldVersion < 10) {
           await db.execute("ALTER TABLE fatture ADD COLUMN iban TEXT");
+        }
+        if (oldVersion < 11) {
+          await db.execute("ALTER TABLE preventivi ADD COLUMN pagato INTEGER NOT NULL DEFAULT 0");
         }
       },
     );
@@ -413,6 +417,7 @@ CREATE TABLE fatture (
     required bool accettato,
     required List<Map<String, dynamic>> acconti,
     required double scontoPercent,
+    required bool pagato,
   }) async {
     final id = await (await database).insert('preventivi', {
       'numero': numero,
@@ -425,6 +430,7 @@ CREATE TABLE fatture (
       'accettato': accettato ? 1 : 0,
       'acconti': jsonEncode(acconti),
       'sconto_percent': scontoPercent,
+      'pagato': pagato ? 1 : 0,
     });
     await autoBackup();
     return id;
@@ -436,6 +442,7 @@ CREATE TABLE fatture (
   Future<int> updateAccontiPreventivo({
     required int id,
     required List<Map<String, dynamic>> acconti,
+    required bool pagato,
   }) async {
     final db = await database;
     final result = await db.update(
@@ -443,6 +450,7 @@ CREATE TABLE fatture (
       {
         'acconti': jsonEncode(acconti),
         'numero_rate': acconti.length,
+        'pagato': pagato ? 1 : 0,
       },
       where: 'id = ?',
       whereArgs: [id],
@@ -460,6 +468,7 @@ CREATE TABLE fatture (
     required bool accettato,
     required List<Map<String, dynamic>> acconti,
     required double scontoPercent,
+    required bool pagato,
   }) async {
     final result = await (await database).update(
       'preventivi',
@@ -472,6 +481,7 @@ CREATE TABLE fatture (
         'accettato': accettato ? 1 : 0,
         'acconti': jsonEncode(acconti),
         'sconto_percent': scontoPercent,
+        'pagato': pagato ? 1 : 0,
       },
       where: 'id = ?',
       whereArgs: [id],
@@ -562,6 +572,7 @@ class PdfGenerator {
     required bool accettato,
     required List<Map<String, dynamic>> acconti,
     required double scontoPercent,
+    required bool pagato,
   }) async {
     // Il font predefinito del pacchetto PDF non contiene il carattere euro (€).
     // Carichiamo quindi un font Unicode con supporto completo al simbolo €.
@@ -782,7 +793,7 @@ class PdfGenerator {
               ],
             ),
           ),
-          if (acconti.isNotEmpty) ...[
+          if (acconti.isNotEmpty || pagato) ...[
             pw.SizedBox(height: 18),
             pw.Container(
               width: double.infinity,
@@ -795,13 +806,13 @@ class PdfGenerator {
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
                 children: [
                   pw.Text(
-                    'ACCONTI',
+                    pagato ? 'PAGATO' : 'ACCONTI',
                     style: pw.TextStyle(
                       fontWeight: pw.FontWeight.bold,
                       color: gold,
                     ),
                   ),
-                  pw.SizedBox(height: 6),
+                  if (acconti.isNotEmpty) pw.SizedBox(height: 6),
                   ...acconti.asMap().entries.map((entry) {
                     final a = entry.value;
                     final importo = (a['importo'] as num?)?.toDouble() ?? 0;
@@ -814,24 +825,14 @@ class PdfGenerator {
                       ),
                     );
                   }),
-                  pw.Divider(color: gold),
-                  pw.Text(
-                    'Totale acconti: € ${acconti.fold<double>(0, (s, a) => s + ((a['importo'] as num?)?.toDouble() ?? 0)).toStringAsFixed(2)}',
-                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
-                  ),
-                  (() {
-                    final saldo = totale -
-                        acconti.fold<double>(
-                          0,
-                          (s, a) =>
-                              s + ((a['importo'] as num?)?.toDouble() ?? 0),
-                        );
-                    return pw.Text(
-                      saldo <= 0.005
-                          ? 'PAGATO'
-                          : 'Saldo residuo: € ${saldo.toStringAsFixed(2)}',
-                    );
-                  })(),
+                  if (!pagato) ...[
+                    pw.Divider(color: gold),
+                    pw.Text(
+                      'Totale acconti: € ${acconti.fold<double>(0, (s, a) => s + ((a['importo'] as num?)?.toDouble() ?? 0)).toStringAsFixed(2)}',
+                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+                    ),
+                    pw.Text('Saldo residuo: € ${(totale - acconti.fold<double>(0, (s, a) => s + ((a['importo'] as num?)?.toDouble() ?? 0))).toStringAsFixed(2)}'),
+                  ],
                 ],
               ),
             ),
@@ -2289,7 +2290,8 @@ Future<void> aggiungiAcconto() async {
         0,
         (sum, a) => sum + ((a['importo'] as num?)?.toDouble() ?? 0),
       );
-      if (totale - totaleAcconti <= 0.005) {
+      final pagato = totale - totaleAcconti <= 0.005;
+      if (pagato) {
         accontiDaSalvare.clear();
         acconti.clear();
       }
@@ -2303,6 +2305,7 @@ Future<void> aggiungiAcconto() async {
         accettato: accettato,
         acconti: accontiDaSalvare,
         scontoPercent: scontoPercent,
+        pagato: pagato,
       );
 
       final clienti = await db.getClienti();
@@ -2323,6 +2326,7 @@ Future<void> aggiungiAcconto() async {
         accettato: accettato,
         acconti: acconti,
         scontoPercent: scontoPercent,
+        pagato: pagato,
       );
 
       if (mounted) {
@@ -2858,6 +2862,7 @@ class _ListaPreventiviScreenState extends State<ListaPreventiviScreen> {
                       accettato: (x['accettato'] as num?)?.toInt() == 1,
                       acconti: _accontiDaPreventivo(x),
                       scontoPercent: (x['sconto_percent'] as num?)?.toDouble() ?? 0,
+                      pagato: (x['pagato'] as num?)?.toInt() == 1,
                     );
                   },
                   icon: const Icon(Icons.picture_as_pdf),
@@ -3291,7 +3296,8 @@ Future<void> aggiungiAcconto() async {
             0,
             (sum, a) => sum + ((a['importo'] as num?)?.toDouble() ?? 0),
           );
-          if (totale - totaleAccontiNuovo <= 0.005) {
+          final pagato = totale - totaleAccontiNuovo <= 0.005;
+          if (pagato) {
             nuovaLista.clear();
           }
 
@@ -3300,6 +3306,7 @@ Future<void> aggiungiAcconto() async {
           final updated = await DatabaseHelper.instance.updateAccontiPreventivo(
             id: preventivoId,
             acconti: nuovaLista,
+            pagato: pagato,
           );
 
           if (updated == 0) {
@@ -3433,7 +3440,8 @@ Future<void> aggiungiAcconto() async {
         0,
         (sum, a) => sum + ((a['importo'] as num?)?.toDouble() ?? 0),
       );
-      if (totale - totaleAcconti <= 0.005) {
+      final pagato = totale - totaleAcconti <= 0.005;
+      if (pagato) {
         acconti.clear();
       }
 
@@ -3446,6 +3454,7 @@ Future<void> aggiungiAcconto() async {
         accettato: accettato,
         acconti: acconti,
         scontoPercent: scontoPercent,
+        pagato: pagato,
       );
 
       if (updated == 0) {
@@ -3460,6 +3469,7 @@ Future<void> aggiungiAcconto() async {
         accettato: accettato,
         acconti: acconti,
         scontoPercent: scontoPercent,
+        pagato: pagato,
       );
 
       if (mounted) {
