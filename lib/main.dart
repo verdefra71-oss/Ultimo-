@@ -595,6 +595,24 @@ class NotificationService {
     return await android.areNotificationsEnabled() ?? false;
   }
 
+  Future<bool> preparaPermessi() async {
+    final android = await _android();
+    if (android == null) return false;
+    var abilitate = await notificheAbilitate();
+    if (!abilitate) {
+      try {
+        await android.requestNotificationsPermission();
+      } catch (_) {}
+      abilitate = await notificheAbilitate();
+    }
+    // L'allarme esatto è solo un'ottimizzazione: se non viene concesso,
+    // la programmazione usa automaticamente il modo non esatto.
+    try {
+      await android.requestExactAlarmsPermission();
+    } catch (_) {}
+    return abilitate;
+  }
+
   Future<void> init() async {
     tz_data.initializeTimeZones();
     try {
@@ -619,9 +637,9 @@ class NotificationService {
       );
     }
 
-    // Richiediamo il permesso all'avvio, ma la programmazione delle rate
-    // avviene esplicitamente quando vengono salvate/modificate.
-    await richiediPermessi();
+    // Non chiediamo permessi qui: su Android la richiesta deve partire da una
+    // schermata visibile/azione dell'utente. Verranno richiesti quando si salva
+    // una rata o premendo 'ABILITA / RICHIEDI PERMESSI'.
   }
 
   DateTime? _parseDataScadenza(String value) {
@@ -654,8 +672,10 @@ class NotificationService {
   }) async {
     await cancellaNotifichePreventivo(preventivoId);
 
-    final abilitate = await notificheAbilitate();
-    if (!abilitate) return 0;
+    // Prima di programmare chiediamo i permessi, se necessari. Non usiamo
+    // 'areNotificationsEnabled' come blocco definitivo: Android può consentire
+    // la programmazione anche prima che lo stato venga aggiornato.
+    await preparaPermessi();
 
     var programmate = 0;
     final now = tz.TZDateTime.now(tz.local);
@@ -4852,7 +4872,7 @@ class _NotificheScreenState extends State<NotificheScreen> {
 
   Future<void> _abilita() async {
     setState(() => loading = true);
-    await NotificationService().richiediPermessi();
+    await NotificationService().preparaPermessi();
     await _aggiorna();
   }
 
