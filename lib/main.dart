@@ -445,6 +445,7 @@ CREATE TABLE fatture (
   Future<int> updateAccontiPreventivo({
     required int id,
     required List<Map<String, dynamic>> acconti,
+    double scontoPercent = 0,
   }) async {
     final db = await database;
     final result = await db.update(
@@ -726,6 +727,534 @@ class NotificationService {
 }
 
 
+class PdfGenerator {
+  static Future<void> generaECondividiPreventivo({
+    required String numero,
+    required String cliente,
+    required List<Map<String, dynamic>> articoli,
+    required double ivaPercent,
+    required bool accettato,
+    required List<Map<String, dynamic>> acconti,
+    double scontoPercent = 0,
+  }) async {
+    // Il font predefinito del pacchetto PDF non contiene il carattere euro (€).
+    // Carichiamo quindi un font Unicode con supporto completo al simbolo €.
+    final fontData = await rootBundle.load('assets/fonts/DejaVuSans.ttf');
+    final boldFontData = await rootBundle.load('assets/fonts/DejaVuSans-Bold.ttf');
+    final pdf = pw.Document(
+      theme: pw.ThemeData.withFont(
+        base: pw.Font.ttf(fontData),
+        bold: pw.Font.ttf(boldFontData),
+      ),
+    );
+    pw.MemoryImage? logo;
+    Map<String, dynamic>? datiCliente;
+
+    try {
+      final bytes = await rootBundle.load('assets/logo.png');
+      logo = pw.MemoryImage(Uint8List.fromList(bytes.buffer.asUint8List()));
+    } catch (_) {}
+
+    // Recupera l'anagrafica completa per stampare tutti i dati del cliente.
+    try {
+      final clienti = await DatabaseHelper.instance.getClienti();
+      final matches = clienti.where(
+        (c) => (c['nome'] ?? '').toString().trim() == cliente.trim(),
+      );
+      if (matches.isNotEmpty) {
+        datiCliente = Map<String, dynamic>.from(matches.first);
+      }
+    } catch (_) {}
+
+    final imponibile = articoli.fold<double>(
+      0,
+      (sum, x) {
+        final prezzo = (x['prezzo'] as num?)?.toDouble() ?? 0;
+        final quantita = (x['quantita'] as num?)?.toDouble() ?? 1;
+        return sum + (prezzo * quantita);
+      },
+    );
+    final sconto = imponibile * scontoPercent.clamp(0, 100) / 100;
+    final imponibileScontato = (imponibile - sconto).clamp(0, double.infinity);
+    final iva = imponibileScontato * ivaPercent / 100;
+    final totale = imponibileScontato + iva;
+    final data = DateFormat('dd/MM/yyyy').format(DateTime.now());
+
+    final gold = PdfColor.fromHex('#B8860B');
+    final dark = PdfColor.fromHex('#1E293B');
+
+    String value(String key) => (datiCliente?[key] ?? '').toString().trim();
+
+    final indirizzo = value('indirizzo');
+    final telefono = value('telefono');
+    final email = value('email');
+    final partitaIva = value('partita_iva');
+    final codiceFiscale = value('codice_fiscale');
+    final parrocchia = value('parrocchia');
+
+    final clientRows = <pw.Widget>[
+      pw.Text(
+        'CLIENTE',
+        style: pw.TextStyle(
+          fontSize: 13,
+          fontWeight: pw.FontWeight.bold,
+          color: gold,
+        ),
+      ),
+      pw.SizedBox(height: 5),
+      pw.Text(
+        cliente,
+        style: pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold),
+      ),
+      if (indirizzo.isNotEmpty) pw.Text('Indirizzo: $indirizzo'),
+      if (telefono.isNotEmpty) pw.Text('Telefono: $telefono'),
+      if (email.isNotEmpty) pw.Text('Email: $email'),
+      if (partitaIva.isNotEmpty) pw.Text('Partita IVA: $partitaIva'),
+      if (codiceFiscale.isNotEmpty) pw.Text('Codice Fiscale: $codiceFiscale'),
+      if (parrocchia.isNotEmpty) pw.Text('Parrocchia: $parrocchia'),
+    ];
+
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.fromLTRB(30, 28, 30, 28),
+        build: (_) => [
+          // Logo ingrandito: circa il doppio rispetto alla versione precedente.
+          pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              if (logo != null)
+                pw.SizedBox(
+                  width: 285,
+                  height: 190,
+                  child: pw.Image(logo, fit: pw.BoxFit.contain),
+                )
+              else
+                pw.SizedBox(
+                  width: 285,
+                  height: 150,
+                  child: pw.Text(
+                    'BTS',
+                    style: pw.TextStyle(
+                      fontSize: 38,
+                      fontWeight: pw.FontWeight.bold,
+                    ),
+                  ),
+                ),
+              pw.SizedBox(width: 18),
+              pw.Expanded(
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.end,
+                  children: [
+                    pw.Text(
+                      accettato ? 'RICEVUTA' : 'PREVENTIVO',
+                      style: pw.TextStyle(
+                        fontSize: 22,
+                        fontWeight: pw.FontWeight.bold,
+                        color: dark,
+                      ),
+                    ),
+                    pw.SizedBox(height: 8),
+                    pw.Divider(color: gold),
+                    pw.SizedBox(height: 8),
+                    pw.Text('N. $numero', style: const pw.TextStyle(fontSize: 11)),
+                    pw.Text('Data: $data', style: const pw.TextStyle(fontSize: 11)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          pw.SizedBox(height: 12),
+          pw.Container(
+            width: double.infinity,
+            padding: const pw.EdgeInsets.all(12),
+            decoration: pw.BoxDecoration(
+              color: PdfColors.grey100,
+              border: pw.Border.all(color: PdfColors.grey300),
+              borderRadius: const pw.BorderRadius.all(pw.Radius.circular(6)),
+            ),
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: clientRows,
+            ),
+          ),
+          pw.SizedBox(height: 18),
+          pw.TableHelper.fromTextArray(
+            headers: ['N.', 'Prodotto / Servizio', 'Q.tà', 'Prezzo unit. (€)', 'Totale (€)'],
+            data: [
+              for (var i = 0; i < articoli.length; i++)
+                [
+                  '${i + 1}',
+                  (articoli[i]['nome'] ?? '').toString(),
+                  ((articoli[i]['quantita'] as num?)?.toDouble() ?? 1).toStringAsFixed(2),
+                  '€ ${((articoli[i]['prezzo'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}',
+                  '€ ${(((articoli[i]['prezzo'] as num?)?.toDouble() ?? 0) * ((articoli[i]['quantita'] as num?)?.toDouble() ?? 1)).toStringAsFixed(2)}',
+                ],
+            ],
+            headerStyle: pw.TextStyle(
+              fontWeight: pw.FontWeight.bold,
+              color: PdfColors.white,
+            ),
+            headerDecoration: pw.BoxDecoration(color: dark),
+            cellAlignments: {
+              0: pw.Alignment.center,
+              1: pw.Alignment.centerLeft,
+              2: pw.Alignment.center,
+              3: pw.Alignment.centerRight,
+              4: pw.Alignment.centerRight,
+            },
+            columnWidths: {
+              0: const pw.FixedColumnWidth(25),
+              1: const pw.FlexColumnWidth(1),
+              2: const pw.FixedColumnWidth(42),
+              3: const pw.FixedColumnWidth(75),
+              4: const pw.FixedColumnWidth(75),
+            },
+          ),
+          pw.SizedBox(height: 18),
+          pw.Container(
+            alignment: pw.Alignment.centerRight,
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.end,
+              children: [
+                pw.Text('Imponibile: € ${imponibile.toStringAsFixed(2)}'),
+                if (scontoPercent > 0) ...[
+                  pw.Text('Sconto ${scontoPercent.clamp(0, 100).toStringAsFixed(0)}%: -€ ${sconto.toStringAsFixed(2)}'),
+                  pw.Text('Imponibile scontato: € ${imponibileScontato.toStringAsFixed(2)}'),
+                ],
+                if (ivaPercent == 0)
+                  pw.Text(
+                    'FUORI CAMPO IVA FCI',
+                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+                  )
+                else
+                  pw.Text(
+                    'IVA ${ivaPercent.toStringAsFixed(0)}%: € ${iva.toStringAsFixed(2)}',
+                  ),
+                pw.SizedBox(height: 5),
+                pw.Container(
+                  padding: const pw.EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  decoration: pw.BoxDecoration(
+                    color: gold,
+                    borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
+                  ),
+                  child: pw.Text(
+                    'TOTALE: € ${totale.toStringAsFixed(2)}',
+                    style: pw.TextStyle(
+                      fontSize: 16,
+                      fontWeight: pw.FontWeight.bold,
+                      color: PdfColors.white,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (acconti.isNotEmpty) ...[
+            pw.SizedBox(height: 18),
+            pw.Container(
+              width: double.infinity,
+              padding: const pw.EdgeInsets.all(12),
+              decoration: pw.BoxDecoration(
+                border: pw.Border.all(color: gold),
+                borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
+              ),
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text(
+                    'ACCONTI',
+                    style: pw.TextStyle(
+                      fontWeight: pw.FontWeight.bold,
+                      color: gold,
+                    ),
+                  ),
+                  pw.SizedBox(height: 6),
+                  ...acconti.asMap().entries.map((entry) {
+                    final a = entry.value;
+                    final importo = (a['importo'] as num?)?.toDouble() ?? 0;
+                    final dataAcconto = (a['data'] ?? '').toString();
+                    return pw.Padding(
+                      padding: const pw.EdgeInsets.symmetric(vertical: 2),
+                      child: pw.Text(
+                        'Acconto ${entry.key + 1}: € ${importo.toStringAsFixed(2)}'
+                        '${dataAcconto.isEmpty ? '' : '  •  $dataAcconto'}',
+                      ),
+                    );
+                  }),
+                  pw.Divider(color: gold),
+                  pw.Text(
+                    'Totale acconti: € ${acconti.fold<double>(0, (s, a) => s + ((a['importo'] as num?)?.toDouble() ?? 0)).toStringAsFixed(2)}',
+                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+                  ),
+                  pw.Text(
+                    'Saldo residuo: € ${(totale - acconti.fold<double>(0, (s, a) => s + ((a['importo'] as num?)?.toDouble() ?? 0))).toStringAsFixed(2)}',
+                  ),
+                ],
+              ),
+            ),
+          ],
+          pw.SizedBox(height: 25),
+          pw.Divider(color: gold),
+          pw.SizedBox(height: 6),
+          pw.Text(
+            'Documento generato da Gestione Preventivi.',
+            style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey600),
+          ),
+        ],
+      ),
+    );
+
+    await Printing.sharePdf(
+      bytes: await pdf.save(),
+      filename: '${accettato ? 'Ricevuta' : 'Preventivo'}_$numero.pdf',
+    );
+  }
+}
+
+
+class NuovoPreventivoScreen extends StatefulWidget {
+  const NuovoPreventivoScreen({super.key});
+
+  @override
+  State<NuovoPreventivoScreen> createState() => _NuovoPreventivoScreenState();
+}
+
+class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
+  final clienteController = TextEditingController();
+  final prodottoController = TextEditingController();
+  final prezzoController = TextEditingController();
+  final quantitaController = TextEditingController(text: '1');
+
+  final List<Map<String, dynamic>> articoli = [];
+
+  final List<Map<String, dynamic>> acconti = [];
+  double ivaPercent = 22;
+  bool accettato = false;
+  bool busy = false;
+
+  late final TextEditingController scontoController;
+
+  double get scontoPercent =>
+      double.tryParse(scontoController.text.trim().replaceAll(',', '.')) ?? 0;
+
+  double get sconto =>
+      (imponibile * scontoPercent.clamp(0, 100) / 100);
+
+  double get imponibileScontato =>
+      (imponibile - sconto).clamp(0, double.infinity);
+
+  double get imponibile => articoli.fold<double>(
+        0,
+        (sum, x) {
+          final prezzo = (x['prezzo'] as num?)?.toDouble() ?? 0;
+          final quantita = (x['quantita'] as num?)?.toDouble() ?? 1;
+          return sum + (prezzo * quantita);
+        },
+      );
+
+  double get iva => imponibileScontato * ivaPercent / 100;
+
+  double get totale => imponibileScontato + iva;
+
+  Future<void> scegliCliente() async {
+    final nome = await selezionaCliente(context);
+    if (nome != null && mounted) {
+      setState(() => clienteController.text = nome);
+    }
+  }
+
+  Future<void> scegliServizio() async {
+    final prodotto = await selezionaProdotto(context);
+    if (prodotto != null && mounted) {
+      setState(() {
+        prodottoController.text = prodotto['nome'].toString();
+        prezzoController.text =
+            (prodotto['prezzo'] as num).toDouble().toStringAsFixed(2);
+        quantitaController.text = '1';
+      });
+    }
+  }
+
+Future<void> aggiungiAcconto() async {
+    final importoController = TextEditingController();
+    final dataController = TextEditingController();
+    final nuoviAcconti = <Map<String, dynamic>>[];
+
+    try {
+      final risultato = await showDialog<List<Map<String, dynamic>>>(
+        context: context,
+        builder: (dialogContext) {
+          return StatefulBuilder(
+            builder: (ctx, setDialogState) {
+              void aggiungiEContinua() {
+                final importo = double.tryParse(
+                  importoController.text.trim().replaceAll(',', '.'),
+                );
+
+                if (importo == null || importo <= 0) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Inserisci un importo acconto valido.'),
+                    ),
+                  );
+                  return;
+                }
+
+                nuoviAcconti.add({
+                  'importo': importo,
+                  'data': dataController.text.trim(),
+                });
+
+                importoController.clear();
+                dataController.clear();
+                setDialogState(() {});
+              }
+
+              void conferma() {
+                final testoImporto = importoController.text.trim();
+                if (testoImporto.isNotEmpty) {
+                  aggiungiEContinua();
+                }
+
+                if (nuoviAcconti.isNotEmpty) {
+                  Navigator.pop(dialogContext, List<Map<String, dynamic>>.from(nuoviAcconti));
+                }
+              }
+
+              return AlertDialog(
+                title: const Text('Aggiungi acconti'),
+                content: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        nuoviAcconti.isEmpty
+                            ? 'Inserisci uno o più acconti.'
+                            : 'Acconti da aggiungere: ${nuoviAcconti.length}',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      if (nuoviAcconti.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        ...nuoviAcconti.asMap().entries.map(
+                          (entry) => Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 2),
+                            child: Text(
+                              '${entry.key + 1}. € ${(entry.value['importo'] as double).toStringAsFixed(2)}'
+                              '${(entry.value['data'] as String).isEmpty ? '' : ' • ${entry.value['data']}'}',
+                            ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: importoController,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: const InputDecoration(
+                          labelText: 'Importo acconto (€)',
+                          prefixIcon: Icon(Icons.euro),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: dataController,
+                        decoration: const InputDecoration(
+                          labelText: 'Data acconto (facoltativa)',
+                          hintText: 'gg/mm/aaaa',
+                          prefixIcon: Icon(Icons.calendar_today_outlined),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    child: const Text('ANNULLA'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: aggiungiEContinua,
+                    icon: const Icon(Icons.add),
+                    label: const Text('AGGIUNGI ALTRO'),
+                  ),
+                  FilledButton(
+                    onPressed: conferma,
+                    child: const Text('SALVA ACCONTI'),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+
+      if (risultato != null && risultato.isNotEmpty && mounted) {
+        setState(() {
+          acconti.addAll(risultato);
+        });
+      }
+    } finally {
+      importoController.dispose();
+      dataController.dispose();
+    }
+  }
+
+  double get totaleAcconti => acconti.fold<double>(
+        0,
+        (sum, a) => sum + ((a['importo'] as num?)?.toDouble() ?? 0),
+      );
+
+  double get saldoResiduo => totale - totaleAcconti;
+
+  @override
+  void initState() {
+    super.initState();
+    scontoController = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    clienteController.dispose();
+    prodottoController.dispose();
+    prezzoController.dispose();
+    quantitaController.dispose();
+    scontoController.dispose();
+    super.dispose();
+  }
+
+  void aggiungiProdotto() {
+    final nome = prodottoController.text.trim();
+    final prezzo = double.tryParse(
+      prezzoController.text.trim().replaceAll(',', '.'),
+    );
+    final quantita = double.tryParse(
+      quantitaController.text.trim().replaceAll(',', '.'),
+    );
+
+    if (nome.isEmpty || prezzo == null || prezzo < 0 || quantita == null || quantita <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Inserisci descrizione, prezzo e quantità validi.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      articoli.add({'nome': nome, 'prezzo': prezzo, 'quantita': quantita});
+      prodottoController.clear();
+      prezzoController.clear();
+      quantitaController.text = '1';
+    });
+  }
+
+
+
+  Future<void> generaPreventivo() async {
     try {
       final db = DatabaseHelper.instance;
       final numero = await db.prossimoNumeroPreventivo();
@@ -747,7 +1276,7 @@ class NotificationService {
         (c) =>
             (c['nome'] as String).toLowerCase() ==
             cliente.toLowerCase(),
-      ) {
+      )) {
         await db.insertCliente(nome: cliente);
       }
 
@@ -1110,6 +1639,158 @@ class NotificationService {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+
+
+class CreaFatturaScreen extends StatefulWidget {
+  final Map<String, dynamic> preventivo;
+  const CreaFatturaScreen({super.key, required this.preventivo});
+
+  @override
+  State<CreaFatturaScreen> createState() => _CreaFatturaScreenState();
+}
+
+class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
+  late final TextEditingController pagamentoController;
+  late final TextEditingController ibanController;
+  bool busy = false;
+
+  List<Map<String, dynamic>> get articoli {
+    final raw = widget.preventivo['articoli'];
+    if (raw is List) {
+      return raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    }
+    try {
+      final decoded = jsonDecode(raw?.toString() ?? '[]');
+      if (decoded is List) {
+        return decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      }
+    } catch (_) {}
+    return [];
+  }
+
+  double get ivaPercent => (widget.preventivo['iva_percent'] as num?)?.toDouble() ?? 0;
+  double get scontoPercent => (widget.preventivo['sconto_percent'] as num?)?.toDouble() ?? 0;
+  double get imponibile {
+    final v = articoli.fold<double>(0, (sum, x) {
+      final prezzo = (x['prezzo'] as num?)?.toDouble() ?? 0;
+      final q = (x['quantita'] as num?)?.toDouble() ?? 1;
+      return sum + prezzo * q;
+    });
+    return (v - v * scontoPercent.clamp(0, 100) / 100).clamp(0, double.infinity).toDouble();
+  }
+  double get iva => imponibile * ivaPercent / 100;
+  double get totale => imponibile + iva;
+
+  @override
+  void initState() {
+    super.initState();
+    pagamentoController = TextEditingController(text: 'Bonifico bancario');
+    ibanController = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    pagamentoController.dispose();
+    ibanController.dispose();
+    super.dispose();
+  }
+
+  Future<void> generaFattura() async {
+    if (busy) return;
+    setState(() => busy = true);
+    try {
+      final db = DatabaseHelper.instance;
+      final numero = await db.prossimoNumeroFattura();
+      await db.insertFattura(
+        numero: numero,
+        cliente: (widget.preventivo['cliente'] ?? '').toString(),
+        articoli: articoli,
+        ivaPercent: ivaPercent,
+        totale: totale,
+        pagamento: pagamentoController.text.trim(),
+        iban: ibanController.text.trim().isEmpty ? null : ibanController.text.trim(),
+      );
+
+      final pdf = pw.Document();
+      pw.MemoryImage? logo;
+      try {
+        final bytes = await rootBundle.load('assets/logo.png');
+        logo = pw.MemoryImage(Uint8List.fromList(bytes.buffer.asUint8List()));
+      } catch (_) {}
+      final gold = PdfColor.fromHex('#B8860B');
+      pdf.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(30),
+          build: (_) => [
+            if (logo != null) pw.Center(child: pw.SizedBox(width: 260, height: 150, child: pw.Image(logo, fit: pw.BoxFit.contain))),
+            pw.Text('FATTURA', style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold)),
+            pw.Text('N. $numero'),
+            pw.Text('Data: ${DateFormat('dd/MM/yyyy').format(DateTime.now())}'),
+            pw.SizedBox(height: 18),
+            pw.Text('CLIENTE', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: gold)),
+            pw.Text((widget.preventivo['cliente'] ?? '').toString()),
+            pw.SizedBox(height: 18),
+            pw.TableHelper.fromTextArray(
+              headers: ['Descrizione', 'Q.tà', 'Prezzo', 'Totale'],
+              data: [
+                for (final a in articoli)
+                  [
+                    (a['nome'] ?? '').toString(),
+                    ((a['quantita'] as num?)?.toDouble() ?? 1).toStringAsFixed(2),
+                    '€ ${((a['prezzo'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}',
+                    '€ ${(((a['prezzo'] as num?)?.toDouble() ?? 0) * ((a['quantita'] as num?)?.toDouble() ?? 1)).toStringAsFixed(2)}',
+                  ],
+              ],
+            ),
+            pw.SizedBox(height: 18),
+            pw.Align(alignment: pw.Alignment.centerRight, child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
+              pw.Text('Imponibile: € ${imponibile.toStringAsFixed(2)}'),
+              if (scontoPercent > 0) pw.Text('Sconto ${scontoPercent.toStringAsFixed(0)}% incluso'),
+              pw.Text(ivaPercent == 0 ? 'FUORI CAMPO IVA FCI' : 'IVA ${ivaPercent.toStringAsFixed(0)}%: € ${iva.toStringAsFixed(2)}'),
+              pw.SizedBox(height: 6),
+              pw.Text('TOTALE: € ${totale.toStringAsFixed(2)}', style: pw.TextStyle(fontSize: 17, fontWeight: pw.FontWeight.bold, color: gold)),
+            ])),
+            pw.SizedBox(height: 20),
+            pw.Text('Pagamento: ${pagamentoController.text.trim()}'),
+            if (ibanController.text.trim().isNotEmpty) pw.Text('IBAN: ${ibanController.text.trim()}'),
+          ],
+        ),
+      );
+      await Printing.sharePdf(bytes: await pdf.save(), filename: 'Fattura_$numero.pdf');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Fattura $numero creata.')));
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Errore fattura: $e')));
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Crea fattura')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Text('Cliente: ${(widget.preventivo['cliente'] ?? '').toString()}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 16),
+          Text('Totale: € ${totale.toStringAsFixed(2)}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 16),
+          TextField(controller: pagamentoController, decoration: const InputDecoration(labelText: 'Tipo di pagamento')),
+          const SizedBox(height: 12),
+          TextField(controller: ibanController, decoration: const InputDecoration(labelText: 'IBAN (facoltativo)')),
+          const SizedBox(height: 24),
+          FilledButton.icon(onPressed: busy ? null : generaFattura, icon: const Icon(Icons.receipt_long), label: Text(busy ? 'CREAZIONE...' : 'CREA E CONDIVIDI FATTURA')),
+        ],
       ),
     );
   }
