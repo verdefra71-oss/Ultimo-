@@ -266,6 +266,10 @@ CREATE TABLE fatture (
     return risultato;
   }
 
+  Future<List<Map<String, dynamic>>> getRate() async {
+    return (await database).query('rate', orderBy: 'data_scadenza');
+  }
+
   Future<int> insertProdotto({
     required String nome,
     required double prezzo,
@@ -4329,6 +4333,79 @@ class AccontiScreen extends StatelessWidget {
                   trailing: Text(
                     '€ ${(x['importo'] as num).toStringAsFixed(2)}',
                     style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+class RateScreen extends StatelessWidget {
+  const RateScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Rate e scadenze'),
+      ),
+      body: FutureBuilder<List<Map<String, dynamic>>>(
+        future: DatabaseHelper.instance.getRate(),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) {
+            return const Center(
+              child: CircularProgressIndicator(),
+            );
+          }
+
+          final rate = snapshot.data!;
+
+          if (rate.isEmpty) {
+            return const _EmptyState(
+              icon: Icons.payments_outlined,
+              text: 'Nessuna rata programmata.',
+            );
+          }
+
+          return ListView.separated(
+            padding: const EdgeInsets.all(12),
+            itemCount: rate.length,
+            separatorBuilder: (_, __) =>
+                const SizedBox(height: 8),
+            itemBuilder: (context, index) {
+              final x = rate[index];
+
+              final data = DateTime.parse(
+                x['data_scadenza'],
+              );
+
+              final pagata = x['pagata'] == 1;
+
+              return Card(
+                child: ListTile(
+                  leading: CircleAvatar(
+                    child: Icon(
+                      pagata
+                          ? Icons.check
+                          : Icons.schedule,
+                    ),
+                  ),
+                  title: Text(
+                    x['cliente'],
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  subtitle: Text(
+                    'Scadenza: '
+                    '${DateFormat('dd/MM/yyyy').format(data)}',
+                  ),
+                  trailing: Text(
+                    '€ ${(x['importo'] as num).toStringAsFixed(2)}',
                   ),
                 ),
               );
