@@ -1156,14 +1156,10 @@ class PdfGenerator {
               children: [
                 pw.Text('DATI AZIENDA', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: gold)),
                 pw.SizedBox(height: 4),
-                pw.Text('Verde Emanuele', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-                pw.Text('via Mario Francesco Pagano 8'),
-                pw.Text('80022 Arzano - NA'),
-                pw.Text('C.F. VRDMNL76H22F839Q'),
-                pw.Text('P.IVA 06089401217'),
-                pw.Text('Cel: 3331798874'),
-                pw.Text('verdeemanuele@gmail.com'),
-                pw.Text('PEC: verdeemanuele@pec.it'),
+                pw.Text('di CARPENTIERI ALFONSO', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                pw.Text('Sede legale: via Ugo Pirro, 9 - 84100 Salerno'),
+                pw.Text('Cell. 328 697 2865'),
+                pw.Text('P. IVA 06051430657'),
               ],
             ),
           ),
@@ -2213,6 +2209,7 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
   final List<Map<String, dynamic>> acconti = [];
   double ivaPercent = 22;
   bool accettato = false;
+  bool pagato = false;
   bool busy = false;
 
   double get imponibile => articoli.fold<double>(
@@ -2442,15 +2439,15 @@ Future<void> aggiungiAcconto() async {
       final db = DatabaseHelper.instance;
       final numero = await db.prossimoNumeroPreventivo();
 
-      // Se gli acconti coprono interamente il totale, il preventivo è PAGATO.
-      // Gli acconti restano salvati e visibili come storico dei pagamenti.
+      // Se l'utente seleziona "Pagato", il preventivo viene considerato
+      // saldato indipendentemente dagli eventuali acconti inseriti.
+      // Gli acconti restano comunque salvati come storico.
       final accontiDaSalvare = List<Map<String, dynamic>>.from(acconti);
       final totaleAcconti = accontiDaSalvare.fold<double>(
         0,
         (sum, a) => sum + ((a['importo'] as num?)?.toDouble() ?? 0),
       );
-      final pagato = totale - totaleAcconti <= 0.005;
-      // Non cancellare gli acconti: devono rimanere nello storico e nel PDF.
+      final pagatoEffettivo = pagato || (totale - totaleAcconti <= 0.005);
 
       final id = await db.insertPreventivo(
         numero: numero,
@@ -2461,7 +2458,7 @@ Future<void> aggiungiAcconto() async {
         accettato: accettato,
         acconti: accontiDaSalvare,
         scontoPercent: scontoPercent,
-        pagato: pagato,
+        pagato: pagatoEffettivo,
       );
 
       final clienti = await db.getClienti();
@@ -2482,7 +2479,7 @@ Future<void> aggiungiAcconto() async {
         accettato: accettato,
         acconti: acconti,
         scontoPercent: scontoPercent,
-        pagato: pagato,
+        pagato: pagatoEffettivo,
       );
 
       if (mounted) {
@@ -2719,7 +2716,7 @@ Future<void> aggiungiAcconto() async {
                           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                         ),
                         OutlinedButton.icon(
-                          onPressed: aggiungiAcconto,
+                          onPressed: pagato ? null : aggiungiAcconto,
                           icon: const Icon(Icons.add),
                           label: const Text('AGGIUNGI'),
                         ),
@@ -2777,6 +2774,54 @@ Future<void> aggiungiAcconto() async {
                     ],
                   ],
                 ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Card(
+              child: CheckboxListTile(
+                value: pagato,
+                onChanged: (v) => setState(() => pagato = v ?? false),
+                title: const Text(
+                  'Pagato',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                subtitle: const Text(
+                  'Considera il preventivo completamente pagato e bypassa il calcolo degli acconti.',
+                ),
+                secondary: const Icon(Icons.paid_outlined),
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Card(
+              child: CheckboxListTile(
+                value: pagato,
+                onChanged: (v) => setState(() => pagato = v ?? false),
+                title: const Text(
+                  'Pagato',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                subtitle: const Text(
+                  'Considera il preventivo completamente pagato e bypassa il calcolo degli acconti.',
+                ),
+                secondary: const Icon(Icons.paid_outlined),
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Card(
+              child: CheckboxListTile(
+                value: pagato,
+                onChanged: (v) => setState(() => pagato = v ?? false),
+                title: const Text(
+                  'Pagato',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                subtitle: const Text(
+                  'Considera il preventivo completamente pagato e bypassa il calcolo degli acconti.',
+                ),
+                secondary: const Icon(Icons.paid_outlined),
+                controlAffinity: ListTileControlAffinity.leading,
               ),
             ),
             const SizedBox(height: 12),
@@ -3268,6 +3313,7 @@ class _ModificaPreventivoScreenState
   late List<Map<String, dynamic>> acconti;
   late double ivaPercent;
   late bool accettato;
+  late bool pagato;
 
   bool busy = false;
 
@@ -3512,6 +3558,7 @@ Future<void> aggiungiAcconto() async {
     ivaPercent =
         (widget.preventivo['iva_percent'] as num?)?.toDouble() ?? 0;
     accettato = (widget.preventivo['accettato'] as num?)?.toInt() == 1;
+    pagato = (widget.preventivo['pagato'] as num?)?.toInt() == 1;
 
     try {
       final raw = jsonDecode(
@@ -3587,12 +3634,14 @@ Future<void> aggiungiAcconto() async {
       final preventivoId =
           (widget.preventivo['id'] as num).toInt();
 
-      // Se il saldo è stato azzerato, mantieni gli acconti come storico.
+      // "Pagato" bypassa il calcolo degli acconti: il preventivo viene
+      // considerato saldato anche se il totale degli acconti è inferiore.
+      // Gli eventuali acconti restano comunque nello storico.
       final totaleAcconti = acconti.fold<double>(
         0,
         (sum, a) => sum + ((a['importo'] as num?)?.toDouble() ?? 0),
       );
-      final pagato = totale - totaleAcconti <= 0.005;
+      final pagatoEffettivo = pagato || (totale - totaleAcconti <= 0.005);
       final updated = await db.updatePreventivo(
         id: preventivoId,
         cliente: cliente,
@@ -3602,7 +3651,7 @@ Future<void> aggiungiAcconto() async {
         accettato: accettato,
         acconti: acconti,
         scontoPercent: scontoPercent,
-        pagato: pagato,
+        pagato: pagatoEffettivo,
       );
 
       if (updated == 0) {
@@ -3617,7 +3666,7 @@ Future<void> aggiungiAcconto() async {
         accettato: accettato,
         acconti: acconti,
         scontoPercent: scontoPercent,
-        pagato: pagato,
+        pagato: pagatoEffettivo,
       );
 
       if (mounted) {
@@ -3847,7 +3896,7 @@ Future<void> aggiungiAcconto() async {
                       children: [
                         const Text('Acconti', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
                         OutlinedButton.icon(
-                          onPressed: aggiungiAcconto,
+                          onPressed: pagato ? null : aggiungiAcconto,
                           icon: const Icon(Icons.add),
                           label: const Text('AGGIUNGI'),
                         ),
