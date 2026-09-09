@@ -567,19 +567,26 @@ class NotificationService {
   final FlutterLocalNotificationsPlugin _notifications =
       FlutterLocalNotificationsPlugin();
 
+  static const String _channelId = 'acconti_channel';
+  static const String _channelName = 'Scadenze rate';
+  static const String _channelDescription =
+      'Avvisi il giorno prima delle scadenze mensili delle rate';
+
   Future<AndroidFlutterLocalNotificationsPlugin?> _android() async {
-    return _notifications
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
+    return _notifications.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
   }
 
   Future<bool> richiediPermessi() async {
     final android = await _android();
     if (android == null) return false;
-
-    final notifiche = await android.requestNotificationsPermission() ?? false;
-    await android.requestExactAlarmsPermission();
-    return notifiche;
+    try {
+      await android.requestNotificationsPermission();
+    } catch (_) {}
+    try {
+      await android.requestExactAlarmsPermission();
+    } catch (_) {}
+    return notificheAbilitate();
   }
 
   Future<bool> notificheAbilitate() async {
@@ -599,66 +606,130 @@ class NotificationService {
     );
 
     await _notifications.initialize(settings);
+
+    final android = await _android();
+    if (android != null) {
+      await android.createNotificationChannel(
+        const AndroidNotificationChannel(
+          _channelId,
+          _channelName,
+          description: _channelDescription,
+          importance: Importance.max,
+        ),
+      );
+    }
+
+    // Richiediamo il permesso all'avvio, ma la programmazione delle rate
+    // avviene esplicitamente quando vengono salvate/modificate.
     await richiediPermessi();
   }
 
-  Future<bool> programmaNotificaRata({
-    required int id,
-    required String cliente,
-    required double importo,
-    required DateTime dataScadenza,
-  }) async {
-    final when = tz.TZDateTime.from(dataScadenza, tz.local);
-
-    if (when.isBefore(tz.TZDateTime.now(tz.local))) return false;
-
+  DateTime? _parseDataScadenza(String value) {
+    final text = value.trim();
+    if (text.isEmpty) return null;
     try {
-      await _notifications.zonedSchedule(
-        id,
-        'Rata in scadenza',
-        'Oggi scade la rata di €${importo.toStringAsFixed(2)} per $cliente.',
-        when,
-        const NotificationDetails(
-          android: AndroidNotificationDetails(
-            'acconti_channel',
-            'Notifiche Acconti',
-            channelDescription: 'Avvisi per gli acconti e le relative scadenze',
-            importance: Importance.max,
-            priority: Priority.high,
-          ),
-        ),
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-        uiLocalNotificationDateInterpretation:
-            UILocalNotificationDateInterpretation.absoluteTime,
-      );
-      return true;
+      return DateFormat('dd/MM/yyyy').parseStrict(text);
     } catch (_) {
-      // Se l'utente non concede gli allarmi esatti, usa il fallback inexact.
+      return DateTime.tryParse(text);
+    }
+  }
+
+  int _notificationId(int preventivoId, int indice) =>
+      preventivoId * 1000 + indice + 1;
+
+  Future<void> cancellaNotifichePreventivo(int preventivoId) async {
+    final richieste = await _notifications.pendingNotificationRequests();
+    final prefix = preventivoId * 1000;
+    for (final richiesta in richieste) {
+      if (richiesta.id > prefix && richiesta.id <= prefix + 1000) {
+        await _notifications.cancel(richiesta.id);
+      }
+    }
+  }
+
+  Future<int> programmaNotificheRate({
+    required int preventivoId,
+    required String cliente,
+    required List<Map<String, dynamic>> acconti,
+  }) async {
+    await cancellaNotifichePreventivo(preventivoId);
+
+    final abilitate = await notificheAbilitate();
+    if (!abilitate) return 0;
+
+    var programmate = 0;
+    final now = tz.TZDateTime.now(tz.local);
+
+    for (var i = 0; i < acconti.length; i++) {
+      final rata = acconti[i];
+      final data = _parseDataScadenza((rata['data'] ?? '').toString());
+      final importo = (rata['importo'] as num?)?.toDouble() ?? 0;
+      if (data == null || importo <= 0) continue;
+
+      // Avviso il giorno PRIMA della scadenza, alle 09:00 (ora italiana).
+      var quando = tz.TZDateTime(
+        tz.local,
+        data.year,
+        data.month,
+        data.day,
+        9,
+      ).subtract(const Duration(days: 1));
+
+      // Se la data è oggi, l'avviso sarebbe ieri: non programmarlo nel passato.
+      if (quando.isBefore(now)) continue;
+
+      final id = _notificationId(preventivoId, i);
       try {
         await _notifications.zonedSchedule(
           id,
-          'Rata in scadenza',
-          'Oggi scade la rata di €${importo.toStringAsFixed(2)} per $cliente.',
-          when,
+          'Rata in scadenza domani',
+          'Domani scade la rata di €${importo.toStringAsFixed(2)} per $cliente.',
+          quando,
           const NotificationDetails(
             android: AndroidNotificationDetails(
-              'acconti_channel',
-              'Notifiche Acconti',
-              channelDescription:
-                  'Avvisi per gli acconti e le relative scadenze',
+              _channelId,
+              _channelName,
+              channelDescription: _channelDescription,
               importance: Importance.max,
               priority: Priority.high,
+              category: AndroidNotificationCategory.reminder,
             ),
           ),
-          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+          androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
           uiLocalNotificationDateInterpretation:
               UILocalNotificationDateInterpretation.absoluteTime,
         );
-        return true;
+        programmate++;
       } catch (_) {
-        return false;
+        try {
+          await _notifications.zonedSchedule(
+            id,
+            'Rata in scadenza domani',
+            'Domani scade la rata di €${importo.toStringAsFixed(2)} per $cliente.',
+            quando,
+            const NotificationDetails(
+              android: AndroidNotificationDetails(
+                _channelId,
+                _channelName,
+                channelDescription: _channelDescription,
+                importance: Importance.max,
+                priority: Priority.high,
+                category: AndroidNotificationCategory.reminder,
+              ),
+            ),
+            androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+            uiLocalNotificationDateInterpretation:
+                UILocalNotificationDateInterpretation.absoluteTime,
+          );
+          programmate++;
+        } catch (_) {}
       }
     }
+    return programmate;
+  }
+
+  Future<List<PendingNotificationRequest>> programmate() async {
+    return _notifications.pendingNotificationRequests();
   }
 }
 
@@ -2284,7 +2355,7 @@ Future<void> aggiungiAcconto() async {
                       TextField(
                         controller: dataController,
                         decoration: const InputDecoration(
-                          labelText: 'Data acconto (facoltativa)',
+                          labelText: 'Data scadenza rata (gg/mm/aaaa)',
                           hintText: 'gg/mm/aaaa',
                           prefixIcon: Icon(Icons.calendar_today_outlined),
                         ),
@@ -2417,6 +2488,11 @@ Future<void> aggiungiAcconto() async {
         scontoPercent: scontoPercent,
       );
 
+      final notificheProgrammate = await NotificationService().programmaNotificheRate(
+        preventivoId: id,
+        cliente: cliente,
+        acconti: acconti,
+      );
       final notificheOk = await NotificationService().notificheAbilitate();
 
       if (mounted) {
@@ -2424,7 +2500,7 @@ Future<void> aggiungiAcconto() async {
           SnackBar(
             content: Text(
               notificheOk
-                  ? 'Preventivo $numero salvato e scadenze programmate.'
+                  ? 'Preventivo $numero salvato: $notificheProgrammate notifiche programmate.'
                   : 'Preventivo $numero salvato. Abilita le notifiche per ricevere gli avvisi.',
             ),
           ),
@@ -3347,7 +3423,7 @@ Future<void> aggiungiAcconto() async {
                       TextField(
                         controller: dataController,
                         decoration: const InputDecoration(
-                          labelText: 'Data acconto (facoltativa)',
+                          labelText: 'Data scadenza rata (gg/mm/aaaa)',
                           hintText: 'gg/mm/aaaa',
                           prefixIcon: Icon(Icons.calendar_today_outlined),
                         ),
@@ -3396,6 +3472,12 @@ Future<void> aggiungiAcconto() async {
             throw Exception('Preventivo non trovato nel database.');
           }
 
+          final notificheProgrammate = await NotificationService().programmaNotificheRate(
+            preventivoId: preventivoId,
+            cliente: clienteController.text.trim(),
+            acconti: nuovaLista,
+          );
+
           if (mounted) {
             setState(() {
               acconti = nuovaLista;
@@ -3404,8 +3486,8 @@ Future<void> aggiungiAcconto() async {
               SnackBar(
                 content: Text(
                   aggiunti.length == 1
-                      ? 'Acconto aggiunto e salvato nel preventivo.'
-                      : '${aggiunti.length} acconti aggiunti e salvati nel preventivo.',
+                      ? 'Acconto aggiunto e salvato. $notificheProgrammate notifica/e programmate.'
+                      : '${aggiunti.length} acconti aggiunti e salvati. $notificheProgrammate notifiche programmate.',
                 ),
               ),
             );
@@ -3543,6 +3625,11 @@ Future<void> aggiungiAcconto() async {
         scontoPercent: scontoPercent,
       );
 
+      final notificheProgrammate = await NotificationService().programmaNotificheRate(
+        preventivoId: preventivoId,
+        cliente: cliente,
+        acconti: acconti,
+      );
       final notificheOk = await NotificationService().notificheAbilitate();
 
       if (mounted) {
@@ -3550,7 +3637,7 @@ Future<void> aggiungiAcconto() async {
           SnackBar(
             content: Text(
               notificheOk
-                  ? 'Preventivo modificato, PDF rigenerato e scadenze programmate.'
+                  ? 'Preventivo modificato: $notificheProgrammate notifiche programmate.'
                   : 'Preventivo modificato. Abilita le notifiche per ricevere gli avvisi.',
             ),
           ),
@@ -4805,7 +4892,30 @@ class _NotificheScreenState extends State<NotificheScreen> {
                   : 'Per ricevere gli avvisi delle acconti, abilita le notifiche per questa app nelle impostazioni di Android.',
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 20),
+            FutureBuilder<List<PendingNotificationRequest>>(
+              future: NotificationService().programmate(),
+              builder: (context, snapshot) {
+                final count = snapshot.data?.length ?? 0;
+                return Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.schedule),
+                    title: const Text('Notifiche programmate'),
+                    subtitle: Text(
+                      count == 0
+                          ? 'Nessuna scadenza attualmente programmata.'
+                          : '$count avviso/i programmato/i.',
+                    ),
+                    trailing: IconButton(
+                      tooltip: 'Aggiorna',
+                      onPressed: () => setState(() {}),
+                      icon: const Icon(Icons.refresh),
+                    ),
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 12),
             FilledButton.icon(
               onPressed: loading ? null : _abilita,
               icon: const Icon(Icons.notifications_active),
