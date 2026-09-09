@@ -451,7 +451,8 @@ CREATE TABLE fatture (
       where: 'id = ?',
       whereArgs: [id],
     );
-    await autoBackup();
+    // Il backup non deve impedire il salvataggio dell'acconto.
+    try { await autoBackup(); } catch (e) { debugPrint('Backup acconti: $e'); }
     return result;
   }
 
@@ -607,6 +608,8 @@ class NotificationService {
     return await android.areNotificationsEnabled() ?? false;
   }
 
+  /// Richiede esplicitamente il permesso Android 13+.
+  /// Restituisce true solo quando Android conferma che le notifiche sono abilitate.
   Future<bool> preparaPermessi() async {
     final android = await _android();
     if (android == null) return false;
@@ -614,14 +617,13 @@ class NotificationService {
     var abilitate = await notificheAbilitate();
     if (!abilitate) {
       try {
-        await android.requestNotificationsPermission();
-      } catch (_) {}
+        final richiesto = await android.requestNotificationsPermission();
+        debugPrint('Permesso notifiche richiesto: $richiesto');
+      } catch (e) {
+        debugPrint('Errore richiesta permesso notifiche: $e');
+      }
       abilitate = await notificheAbilitate();
     }
-
-    // Non rendiamo il permesso degli allarmi esatti obbligatorio.
-    // Le notifiche vengono programmate con il sistema INEXACT, compatibile
-    // anche quando Android non concede SCHEDULE_EXACT_ALARM.
     return abilitate;
   }
 
@@ -631,23 +633,19 @@ class NotificationService {
     try {
       return DateFormat('dd/MM/yyyy').parseStrict(text);
     } catch (_) {
-      try {
-        return DateTime.parse(text);
-      } catch (_) {
-        return null;
-      }
+      return null;
     }
   }
 
   int _notificationId(int preventivoId, int indice) =>
-      preventivoId * 1000 + indice + 1;
+      100000 + preventivoId * 1000 + indice + 1;
 
   Future<void> cancellaNotifichePreventivo(int preventivoId) async {
     final richieste = await _notifications.pendingNotificationRequests();
-    final minId = preventivoId * 1000;
+    final minId = 100000 + preventivoId * 1000;
     final maxId = minId + 999;
     for (final richiesta in richieste) {
-      if (richiesta.id > minId && richiesta.id <= maxId) {
+      if (richiesta.id >= minId && richiesta.id <= maxId) {
         await _notifications.cancel(richiesta.id);
       }
     }
@@ -658,11 +656,30 @@ class NotificationService {
     required String cliente,
     required List<Map<String, dynamic>> acconti,
   }) async {
+    // Prima elimina SEMPRE le vecchie notifiche del preventivo.
     await cancellaNotifichePreventivo(preventivoId);
-    await preparaPermessi();
+
+    // Se l'utente ha negato il permesso non fingiamo di aver programmato nulla.
+    final abilitate = await preparaPermessi();
+    if (!abilitate) {
+      debugPrint('Notifiche Android non abilitate: programmazione annullata.');
+      return 0;
+    }
 
     final now = tz.TZDateTime.now(tz.local);
-    var programmate = 0;
+    final dettagli = NotificationDetails(
+      android: AndroidNotificationDetails(
+        _channelId,
+        _channelName,
+        channelDescription: _channelDescription,
+        importance: Importance.max,
+        priority: Priority.high,
+        category: AndroidNotificationCategory.reminder,
+        enableVibration: true,
+        playSound: true,
+        autoCancel: true,
+      ),
+    );
 
     for (var i = 0; i < acconti.length; i++) {
       final rata = acconti[i];
@@ -670,35 +687,19 @@ class NotificationService {
       final importo = (rata['importo'] as num?)?.toDouble() ?? 0;
       if (data == null || importo <= 0) continue;
 
-      // La notifica deve arrivare il giorno precedente alle 09:00.
-      final quando = tz.TZDateTime(
+      // Giorno precedente alla scadenza, ore 09:00 Europe/Rome.
+      final scadenza = tz.TZDateTime(
         tz.local,
         data.year,
         data.month,
         data.day,
         9,
-      ).subtract(const Duration(days: 1));
-
-      // Una rata già scaduta/non più notificabile non viene programmata.
+      );
+      final quando = scadenza.subtract(const Duration(days: 1));
       if (!quando.isAfter(now)) continue;
 
       final id = _notificationId(preventivoId, i);
-      final dettagli = NotificationDetails(
-        android: AndroidNotificationDetails(
-          _channelId,
-          _channelName,
-          channelDescription: _channelDescription,
-          importance: Importance.max,
-          priority: Priority.high,
-          category: AndroidNotificationCategory.reminder,
-          enableVibration: true,
-          playSound: true,
-        ),
-      );
-
       try {
-        // INEXACT è intenzionale: non richiede il permesso per gli allarmi
-        // esatti e funziona anche sui dispositivi Android recenti.
         await _notifications.zonedSchedule(
           id,
           'Rata in scadenza domani',
@@ -709,24 +710,31 @@ class NotificationService {
           uiLocalNotificationDateInterpretation:
               UILocalNotificationDateInterpretation.absoluteTime,
         );
-        programmate++;
-      } catch (e) {
-        // Non nascondiamo completamente l'errore: se la programmazione fallisce
-        // l'utente vedrà il numero reale (0) nella schermata notifiche.
-        debugPrint('Errore programmazione notifica $id: $e');
+        debugPrint('Notifica $id programmata per $quando');
+      } catch (e, st) {
+        debugPrint('Errore programmazione notifica $id: $e\n$st');
       }
     }
 
-    // Verifica reale: contiamo solo gli ID che Android mantiene tra i pending.
     final pending = await _notifications.pendingNotificationRequests();
     final ids = <int>{
       for (var i = 0; i < acconti.length; i++) _notificationId(preventivoId, i),
     };
-    return pending.where((n) => ids.contains(n.id)).length;
+    final result = pending.where((n) => ids.contains(n.id)).length;
+    debugPrint('Notifiche realmente pending per preventivo $preventivoId: $result');
+    return result;
   }
 
   Future<List<PendingNotificationRequest>> programmate() async =>
       _notifications.pendingNotificationRequests();
+
+  Future<void> apriImpostazioniNotifiche() async {
+    try {
+      await launchUrl(Uri.parse('app-settings:'));
+    } catch (e) {
+      debugPrint('Impossibile aprire le impostazioni notifiche: $e');
+    }
+  }
 }
 
 class PdfGenerator {
@@ -2282,6 +2290,7 @@ Future<void> aggiungiAcconto() async {
                 final importo = double.tryParse(
                   importoController.text.trim().replaceAll(',', '.'),
                 );
+                final data = dataController.text.trim();
 
                 if (importo == null || importo <= 0) {
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -2292,9 +2301,18 @@ Future<void> aggiungiAcconto() async {
                   return;
                 }
 
+                try {
+                  DateFormat('dd/MM/yyyy').parseStrict(data);
+                } catch (_) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Inserisci una data valida nel formato gg/mm/aaaa.')),
+                  );
+                  return;
+                }
+
                 nuoviAcconti.add({
                   'importo': importo,
-                  'data': dataController.text.trim(),
+                  'data': data,
                 });
 
                 importoController.clear();
@@ -2305,7 +2323,9 @@ Future<void> aggiungiAcconto() async {
               void conferma() {
                 final testoImporto = importoController.text.trim();
                 if (testoImporto.isNotEmpty) {
+                  final primaLunghezza = nuoviAcconti.length;
                   aggiungiEContinua();
+                  if (nuoviAcconti.length == primaLunghezza) return;
                 }
 
                 if (nuoviAcconti.isNotEmpty) {
@@ -3350,6 +3370,7 @@ Future<void> aggiungiAcconto() async {
                 final importo = double.tryParse(
                   importoController.text.trim().replaceAll(',', '.'),
                 );
+                final data = dataController.text.trim();
 
                 if (importo == null || importo <= 0) {
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -3360,9 +3381,18 @@ Future<void> aggiungiAcconto() async {
                   return;
                 }
 
+                try {
+                  DateFormat('dd/MM/yyyy').parseStrict(data);
+                } catch (_) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Inserisci una data valida nel formato gg/mm/aaaa.')),
+                  );
+                  return;
+                }
+
                 nuoviAcconti.add({
                   'importo': importo,
-                  'data': dataController.text.trim(),
+                  'data': data,
                 });
 
                 importoController.clear();
@@ -3373,7 +3403,9 @@ Future<void> aggiungiAcconto() async {
               void conferma() {
                 final testoImporto = importoController.text.trim();
                 if (testoImporto.isNotEmpty) {
+                  final primaLunghezza = nuoviAcconti.length;
                   aggiungiEContinua();
+                  if (nuoviAcconti.length == primaLunghezza) return;
                 }
 
                 if (nuoviAcconti.isNotEmpty) {
@@ -3476,7 +3508,7 @@ Future<void> aggiungiAcconto() async {
 
           if (mounted) {
             setState(() {
-              acconti = nuovaLista;
+              acconti = List<Map<String, dynamic>>.from(nuovaLista);
             });
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
@@ -4917,9 +4949,20 @@ class _NotificheScreenState extends State<NotificheScreen> {
               icon: const Icon(Icons.notifications_active),
               label: const Text('ABILITA / RICHIEDI PERMESSI'),
             ),
+            if (abilitate == false) ...[
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: () async {
+                  await NotificationService().apriImpostazioniNotifiche();
+                  if (mounted) _aggiorna();
+                },
+                icon: const Icon(Icons.settings),
+                label: const Text('APRI IMPOSTAZIONI ANDROID'),
+              ),
+            ],
             const SizedBox(height: 12),
             const Text(
-              'Nota: Android può richiedere anche il permesso per gli allarmi esatti. Se viene negato, l’app utilizza comunque il sistema di notifica non esatto quando possibile.',
+              'Le notifiche delle rate vengono inviate alle 09:00 del giorno precedente alla scadenza. Non è necessario attivare gli allarmi esatti.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 12),
             ),
