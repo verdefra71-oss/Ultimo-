@@ -617,6 +617,16 @@ class PdfGenerator {
     final totale = imponibileScontato + iva;
     final data = DateFormat('dd/MM/yyyy').format(DateTime.now());
 
+    // Determina sempre lo stato dal saldo reale, così anche i preventivi
+    // già esistenti vengono stampati come PAGATO quando gli acconti coprono
+    // interamente il totale. Il flag del database resta comunque valido.
+    final totaleAccontiPdf = acconti.fold<double>(
+      0,
+      (sum, a) => sum + ((a['importo'] as num?)?.toDouble() ?? 0),
+    );
+    final preventivoPagato =
+        pagato || (totale - totaleAccontiPdf).abs() <= 0.005;
+
     final gold = PdfColor.fromHex('#B8860B');
     final dark = gold;
 
@@ -793,7 +803,7 @@ class PdfGenerator {
               ],
             ),
           ),
-          if (acconti.isNotEmpty || pagato) ...[
+          if (acconti.isNotEmpty || preventivoPagato) ...[
             pw.SizedBox(height: 18),
             pw.Container(
               width: double.infinity,
@@ -806,7 +816,7 @@ class PdfGenerator {
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
                 children: [
                   pw.Text(
-                    pagato ? 'PAGATO' : 'ACCONTI',
+                    preventivoPagato ? 'PAGATO' : 'ACCONTI',
                     style: pw.TextStyle(
                       fontWeight: pw.FontWeight.bold,
                       color: gold,
@@ -825,7 +835,7 @@ class PdfGenerator {
                       ),
                     );
                   }),
-                  if (!pagato) ...[
+                  if (!preventivoPagato) ...[
                     pw.Divider(color: gold),
                     pw.Text(
                       'Totale acconti: € ${acconti.fold<double>(0, (s, a) => s + ((a['importo'] as num?)?.toDouble() ?? 0)).toStringAsFixed(2)}',
@@ -2283,18 +2293,15 @@ Future<void> aggiungiAcconto() async {
       final db = DatabaseHelper.instance;
       final numero = await db.prossimoNumeroPreventivo();
 
-      // Se gli acconti coprono interamente il totale, il saldo è azzerato:
-      // gli acconti vengono rimossi anche dalla sezione Acconti.
+      // Se gli acconti coprono interamente il totale, il preventivo è PAGATO.
+      // Gli acconti restano salvati e visibili come storico dei pagamenti.
       final accontiDaSalvare = List<Map<String, dynamic>>.from(acconti);
       final totaleAcconti = accontiDaSalvare.fold<double>(
         0,
         (sum, a) => sum + ((a['importo'] as num?)?.toDouble() ?? 0),
       );
       final pagato = totale - totaleAcconti <= 0.005;
-      if (pagato) {
-        accontiDaSalvare.clear();
-        acconti.clear();
-      }
+      // Non cancellare gli acconti: devono rimanere nello storico e nel PDF.
 
       final id = await db.insertPreventivo(
         numero: numero,
@@ -3290,17 +3297,13 @@ Future<void> aggiungiAcconto() async {
             ...aggiunti,
           ];
 
-          // Se gli acconti azzerano il saldo, rimuovili completamente
-          // dalla sezione Acconti e dal database.
+          // Se gli acconti azzerano il saldo, il preventivo diventa PAGATO.
+          // Gli acconti restano visibili come storico dei pagamenti.
           final totaleAccontiNuovo = nuovaLista.fold<double>(
             0,
             (sum, a) => sum + ((a['importo'] as num?)?.toDouble() ?? 0),
           );
           final pagato = totale - totaleAccontiNuovo <= 0.005;
-          if (pagato) {
-            nuovaLista.clear();
-          }
-
           // Salvataggio diretto degli acconti: non dipende dalla generazione
           // del PDF e non riscrive gli altri dati del preventivo.
           final updated = await DatabaseHelper.instance.updateAccontiPreventivo(
@@ -3435,16 +3438,12 @@ Future<void> aggiungiAcconto() async {
       final preventivoId =
           (widget.preventivo['id'] as num).toInt();
 
-      // Se il saldo è stato azzerato, elimina tutti gli acconti.
+      // Se il saldo è stato azzerato, mantieni gli acconti come storico.
       final totaleAcconti = acconti.fold<double>(
         0,
         (sum, a) => sum + ((a['importo'] as num?)?.toDouble() ?? 0),
       );
       final pagato = totale - totaleAcconti <= 0.005;
-      if (pagato) {
-        acconti.clear();
-      }
-
       final updated = await db.updatePreventivo(
         id: preventivoId,
         cliente: cliente,
