@@ -23,6 +23,12 @@ void main() async {
   await NotificationService().init();
   await DatabaseHelper.instance.createAutomaticBackup();
   runApp(const PreventiviApp());
+
+  // Il dialogo di autorizzazione Android deve essere richiesto quando
+  // l'app ha già un'Activity visibile. Richiederlo prima di runApp()
+  // può non mostrare il dialogo e lasciare le notifiche disabilitate.
+  await Future<void>.delayed(const Duration(milliseconds: 800));
+  await NotificationService().preparaPermessi();
 }
 
 class PreventiviApp extends StatelessWidget {
@@ -618,11 +624,14 @@ class NotificationService {
       var abilitate = await notificheAbilitate();
       if (abilitate) return true;
 
-      // Android 13+: mostra la richiesta di autorizzazione solo quando
-      // l'utente entra nella sezione Notifiche o salva una scadenza.
+      // Android 13+: richiesta runtime POST_NOTIFICATIONS.
       final richiesto = await android.requestNotificationsPermission();
-      debugPrint('Permesso POST_NOTIFICATIONS richiesto: $richiesto');
+      debugPrint('Richiesta POST_NOTIFICATIONS: $richiesto');
+
       abilitate = await notificheAbilitate();
+      if (!abilitate) {
+        debugPrint('POST_NOTIFICATIONS ancora disabilitato: l'utente deve abilitarlo nelle impostazioni Android.');
+      }
       return abilitate;
     } catch (e, st) {
       debugPrint('Errore autorizzazione notifiche: $e\n$st');
@@ -663,10 +672,13 @@ class NotificationService {
     await cancellaNotifichePreventivo(preventivoId);
 
     // Se l'utente ha negato il permesso non fingiamo di aver programmato nulla.
-    final abilitate = await preparaPermessi();
+    final abilitate = await notificheAbilitate();
     if (!abilitate) {
-      debugPrint('Notifiche Android non abilitate: programmazione annullata.');
-      return 0;
+      final richieste = await preparaPermessi();
+      if (!richieste) {
+        debugPrint('Notifiche Android non abilitate: nessuna programmazione possibile.');
+        return 0;
+      }
     }
 
     final now = tz.TZDateTime.now(tz.local);
@@ -3531,14 +3543,13 @@ Future<void> aggiungiAcconto() async {
             final testo = aggiunti.length == 1
                 ? 'Acconto aggiunto e salvato.'
                 : '${aggiunti.length} acconti aggiunti e salvati.';
+            final messaggio = erroreNotifiche != null
+                ? '$testo Le notifiche non sono state programmate. Puoi abilitarle dalla sezione Notifiche.'
+                : notificheProgrammate > 0
+                    ? '$testo $notificheProgrammate notifiche programmate.'
+                    : '$testo Nessuna notifica programmata: controlla i permessi Android e la data di scadenza.';
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  erroreNotifiche != null
-                      ? '$testo Notifiche non abilitate: abilita i permessi nella sezione Notifiche.'
-                      : '$testo $notificheProgrammate notifiche programmate.',
-                ),
-              ),
+              SnackBar(content: Text(messaggio)),
             );
           }
         } catch (e) {
