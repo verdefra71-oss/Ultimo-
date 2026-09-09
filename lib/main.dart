@@ -9,9 +9,6 @@ import 'package:path/path.dart' as p;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:timezone/timezone.dart' as tz;
-import 'package:timezone/data/latest.dart' as tz_data;
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:file_picker/file_picker.dart';
@@ -20,13 +17,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Le notifiche vengono inizializzate senza bloccare l'avvio dell'app.
-  try {
-    await NotificationService().init();
-  } catch (_) {}
-  try {
-    await DatabaseHelper.instance.createAutomaticBackup();
-  } catch (_) {}
+  await DatabaseHelper.instance.createAutomaticBackup();
   runApp(const PreventiviApp());
 }
 
@@ -266,10 +257,6 @@ CREATE TABLE fatture (
     return risultato;
   }
 
-  Future<List<Map<String, dynamic>>> getRate() async {
-    return (await database).query('rate', orderBy: 'data_scadenza');
-  }
-
   Future<int> insertProdotto({
     required String nome,
     required double prezzo,
@@ -449,7 +436,6 @@ CREATE TABLE fatture (
   Future<int> updateAccontiPreventivo({
     required int id,
     required List<Map<String, dynamic>> acconti,
-    double scontoPercent = 0,
   }) async {
     final db = await database;
     final result = await db.update(
@@ -567,170 +553,6 @@ CREATE TABLE fatture (
   }
 
 }
-class NotificationService {
-  static final NotificationService _instance = NotificationService._internal();
-
-  factory NotificationService() => _instance;
-
-  NotificationService._internal();
-
-  final FlutterLocalNotificationsPlugin _notifications =
-      FlutterLocalNotificationsPlugin();
-  bool _initialized = false;
-
-  Future<AndroidFlutterLocalNotificationsPlugin?> _android() async {
-    return _notifications.resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin>();
-  }
-
-  Future<bool> richiediPermessi() async {
-    try {
-      final android = await _android();
-      if (android == null) return false;
-      try { await android.requestNotificationsPermission(); } catch (_) {}
-      try { await android.requestExactAlarmsPermission(); } catch (_) {}
-      return await notificheAbilitate();
-    } catch (_) {
-      return false;
-    }
-  }
-
-  Future<bool> notificheAbilitate() async {
-    try {
-      final android = await _android();
-      if (android == null) return false;
-      return await android.areNotificationsEnabled() ?? false;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  Future<void> init() async {
-    if (_initialized) return;
-    try {
-      tz_data.initializeTimeZones();
-      try { tz.setLocalLocation(tz.getLocation('Europe/Rome')); } catch (_) {}
-
-      const settings = InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-      );
-      await _notifications.initialize(settings);
-
-      final android = await _android();
-      await android?.createNotificationChannel(
-        const AndroidNotificationChannel(
-          'acconti_channel',
-          'Notifiche Acconti',
-          description: 'Avvisi per gli acconti e le relative scadenze',
-          importance: Importance.max,
-        ),
-      );
-      _initialized = true;
-      // Il permesso viene richiesto separatamente e non può bloccare l'app.
-      await richiediPermessi();
-    } catch (_) {
-      // Un problema di notifiche non deve mai impedire l'avvio dell'app
-      // né la creazione di preventivi/PDF.
-    }
-  }
-
-  DateTime? _parseDataAcconto(String value) {
-    final testo = value.trim();
-    if (testo.isEmpty) return null;
-    try {
-      final parti = testo.split('/');
-      if (parti.length != 3) return null;
-      final giorno = int.parse(parti[0]);
-      final mese = int.parse(parti[1]);
-      final anno = int.parse(parti[2]);
-      final data = DateTime(anno, mese, giorno, 9, 0);
-      if (data.year != anno || data.month != mese || data.day != giorno) return null;
-      return data;
-    } catch (_) { return null; }
-  }
-
-  Future<bool> programmaNotificaRata({
-    required int id,
-    required String cliente,
-    required double importo,
-    required DateTime dataScadenza,
-  }) async {
-    try {
-      await init();
-      final when = tz.TZDateTime(tz.local, dataScadenza.year, dataScadenza.month,
-          dataScadenza.day, 9, 0);
-      if (!when.isAfter(tz.TZDateTime.now(tz.local))) return false;
-
-      final dettagli = NotificationDetails(
-        android: AndroidNotificationDetails(
-          'acconti_channel',
-          'Notifiche Acconti',
-          channelDescription: 'Avvisi per gli acconti e le relative scadenze',
-          importance: Importance.max,
-          priority: Priority.high,
-          category: AndroidNotificationCategory.reminder,
-          visibility: NotificationVisibility.public,
-        ),
-      );
-      final testo = 'Oggi scade l’acconto di €${importo.toStringAsFixed(2)} per $cliente.';
-      try {
-        await _notifications.zonedSchedule(
-          id, 'Acconto in scadenza', testo, when, dettagli,
-          androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-          uiLocalNotificationDateInterpretation:
-              UILocalNotificationDateInterpretation.absoluteTime,
-        );
-        return true;
-      } catch (_) {
-        try {
-          await _notifications.zonedSchedule(
-            id, 'Acconto in scadenza', testo, when, dettagli,
-            androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-            uiLocalNotificationDateInterpretation:
-                UILocalNotificationDateInterpretation.absoluteTime,
-          );
-          return true;
-        } catch (_) { return false; }
-      }
-    } catch (_) { return false; }
-  }
-
-  Future<int> programmaNotificheAcconti({
-    required int preventivoId,
-    required String cliente,
-    required List<Map<String, dynamic>> acconti,
-  }) async {
-    try {
-      await init();
-      int programmate = 0;
-      // La cancellazione di una vecchia notifica non deve bloccare il salvataggio.
-      for (int i = 0; i < 100; i++) {
-        try { await _notifications.cancel(_idNotificaAcconto(preventivoId, i)); } catch (_) {}
-      }
-      for (int i = 0; i < acconti.length; i++) {
-        try {
-          final acconto = acconti[i];
-          final data = _parseDataAcconto((acconto['data'] ?? '').toString());
-          final rawImporto = acconto['importo'];
-          final importo = rawImporto is num ? rawImporto.toDouble() : double.tryParse(rawImporto?.toString() ?? '');
-          if (data == null || importo == null || importo <= 0) continue;
-          if (await programmaNotificaRata(
-            id: _idNotificaAcconto(preventivoId, i),
-            cliente: cliente,
-            importo: importo,
-            dataScadenza: data,
-          )) programmate++;
-        } catch (_) {}
-      }
-      return programmate;
-    } catch (_) { return 0; }
-  }
-
-  int _idNotificaAcconto(int preventivoId, int indice) =>
-      100000 + (preventivoId * 100) + indice;
-}
-
-
 class PdfGenerator {
   static Future<void> generaECondividiPreventivo({
     required String numero,
@@ -739,7 +561,7 @@ class PdfGenerator {
     required double ivaPercent,
     required bool accettato,
     required List<Map<String, dynamic>> acconti,
-    double scontoPercent = 0,
+    required double scontoPercent,
   }) async {
     // Il font predefinito del pacchetto PDF non contiene il carattere euro (€).
     // Carichiamo quindi un font Unicode con supporto completo al simbolo €.
@@ -778,14 +600,14 @@ class PdfGenerator {
         return sum + (prezzo * quantita);
       },
     );
-    final sconto = imponibile * scontoPercent.clamp(0, 100) / 100;
-    final imponibileScontato = (imponibile - sconto).clamp(0, double.infinity);
+    final sconto = imponibile * scontoPercent / 100;
+    final imponibileScontato = (imponibile - sconto).clamp(0, double.infinity).toDouble();
     final iva = imponibileScontato * ivaPercent / 100;
     final totale = imponibileScontato + iva;
     final data = DateFormat('dd/MM/yyyy').format(DateTime.now());
 
     final gold = PdfColor.fromHex('#B8860B');
-    final dark = PdfColor.fromHex('#1E293B');
+    final dark = gold;
 
     String value(String key) => (datiCliente?[key] ?? '').toString().trim();
 
@@ -873,8 +695,8 @@ class PdfGenerator {
             width: double.infinity,
             padding: const pw.EdgeInsets.all(12),
             decoration: pw.BoxDecoration(
-              color: PdfColors.grey100,
-              border: pw.Border.all(color: PdfColors.grey300),
+              color: PdfColors.white,
+              border: pw.Border.all(color: gold),
               borderRadius: const pw.BorderRadius.all(pw.Radius.circular(6)),
             ),
             child: pw.Column(
@@ -899,7 +721,7 @@ class PdfGenerator {
               fontWeight: pw.FontWeight.bold,
               color: PdfColors.white,
             ),
-            headerDecoration: pw.BoxDecoration(color: dark),
+            headerDecoration: pw.BoxDecoration(color: gold),
             cellAlignments: {
               0: pw.Alignment.center,
               1: pw.Alignment.centerLeft,
@@ -923,7 +745,10 @@ class PdfGenerator {
               children: [
                 pw.Text('Imponibile: € ${imponibile.toStringAsFixed(2)}'),
                 if (scontoPercent > 0) ...[
-                  pw.Text('Sconto ${scontoPercent.clamp(0, 100).toStringAsFixed(0)}%: -€ ${sconto.toStringAsFixed(2)}'),
+                  pw.Text(
+                    'Sconto ${scontoPercent.toStringAsFixed(0)}%: -€ ${sconto.toStringAsFixed(2)}',
+                    style: pw.TextStyle(color: gold, fontWeight: pw.FontWeight.bold),
+                  ),
                   pw.Text('Imponibile scontato: € ${imponibileScontato.toStringAsFixed(2)}'),
                 ],
                 if (ivaPercent == 0)
@@ -1017,8 +842,745 @@ class PdfGenerator {
       filename: '${accettato ? 'Ricevuta' : 'Preventivo'}_$numero.pdf',
     );
   }
+
+  static Future<void> generaECondividiFattura({
+    required String numero,
+    required String cliente,
+    required List<Map<String, dynamic>> articoli,
+    required double ivaPercent,
+    required String pagamento,
+    String? iban,
+  }) async {
+    final fontData = await rootBundle.load('assets/fonts/DejaVuSans.ttf');
+    final boldFontData = await rootBundle.load('assets/fonts/DejaVuSans-Bold.ttf');
+    final pdf = pw.Document(
+      theme: pw.ThemeData.withFont(
+        base: pw.Font.ttf(fontData),
+        bold: pw.Font.ttf(boldFontData),
+      ),
+    );
+    pw.MemoryImage? logo;
+    Map<String, dynamic>? datiCliente;
+    try {
+      final bytes = await rootBundle.load('assets/logo.png');
+      logo = pw.MemoryImage(Uint8List.fromList(bytes.buffer.asUint8List()));
+    } catch (_) {}
+    try {
+      final clienti = await DatabaseHelper.instance.getClienti();
+      final matches = clienti.where(
+        (c) => (c['nome'] ?? '').toString().trim() == cliente.trim(),
+      );
+      if (matches.isNotEmpty) datiCliente = Map<String, dynamic>.from(matches.first);
+    } catch (_) {}
+
+    final imponibile = articoli.fold<double>(0, (sum, x) {
+      final prezzo = (x['prezzo'] as num?)?.toDouble() ?? 0;
+      final quantita = (x['quantita'] as num?)?.toDouble() ?? 1;
+      return sum + prezzo * quantita;
+    });
+    final iva = imponibile * ivaPercent / 100;
+    final totale = imponibile + iva;
+    final data = DateFormat('dd/MM/yyyy').format(DateTime.now());
+    final gold = PdfColor.fromHex('#B8860B');
+
+    String value(String key) => (datiCliente?[key] ?? '').toString().trim();
+
+    final rows = <pw.TableRow>[
+      pw.TableRow(
+        decoration: pw.BoxDecoration(color: PdfColor.fromHex('#F7F1DC')),
+        children: [
+          pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text('Descrizione', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+          pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text('Qtà', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+          pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text('Prezzo', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+          pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text('Totale', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+        ],
+      ),
+    ];
+    for (final a in articoli) {
+      final prezzo = (a['prezzo'] as num?)?.toDouble() ?? 0;
+      final q = (a['quantita'] as num?)?.toDouble() ?? 1;
+      rows.add(pw.TableRow(children: [
+        pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text((a['nome'] ?? '').toString())),
+        pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text(q.toStringAsFixed(q == q.roundToDouble() ? 0 : 2))),
+        pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text('${prezzo.toStringAsFixed(2)} €')),
+        pw.Padding(padding: const pw.EdgeInsets.all(7), child: pw.Text('${(prezzo*q).toStringAsFixed(2)} €')),
+      ]));
+    }
+
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.fromLTRB(30, 28, 30, 28),
+        build: (_) => [
+          pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            children: [
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  if (logo != null)
+                    pw.SizedBox(
+                      width: 285,
+                      height: 125,
+                      child: pw.Image(logo, fit: pw.BoxFit.contain),
+                    )
+                  else
+                    pw.SizedBox(
+                      width: 285,
+                      height: 90,
+                      child: pw.Text(
+                        'BTS',
+                        style: pw.TextStyle(fontSize: 38, fontWeight: pw.FontWeight.bold),
+                      ),
+                    ),
+                  pw.SizedBox(height: 6),
+                  pw.Text(
+                    'FATTURA',
+                    style: pw.TextStyle(
+                      fontSize: 20,
+                      fontWeight: pw.FontWeight.bold,
+                      color: gold,
+                    ),
+                  ),
+                ],
+              ),
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.end,
+                children: [
+                  pw.Text('N. $numero', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+                  pw.Text('Data: $data'),
+                ],
+              ),
+            ],
+          ),
+          pw.SizedBox(height: 18),
+          pw.Text('CLIENTE', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: gold)),
+          pw.SizedBox(height: 4),
+          pw.Text(cliente, style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+          if (value('indirizzo').isNotEmpty) pw.Text('Indirizzo: ${value('indirizzo')}'),
+          if (value('telefono').isNotEmpty) pw.Text('Telefono: ${value('telefono')}'),
+          if (value('email').isNotEmpty) pw.Text('Email: ${value('email')}'),
+          if (value('partita_iva').isNotEmpty) pw.Text('Partita IVA: ${value('partita_iva')}'),
+          if (value('codice_fiscale').isNotEmpty) pw.Text('Codice Fiscale: ${value('codice_fiscale')}'),
+          pw.SizedBox(height: 20),
+          pw.Table(
+            border: pw.TableBorder.all(color: PdfColor.fromHex('#D8C98A')),
+            columnWidths: {0: const pw.FlexColumnWidth(4), 1: const pw.FlexColumnWidth(1), 2: const pw.FlexColumnWidth(1.5), 3: const pw.FlexColumnWidth(1.7)},
+            children: rows,
+          ),
+          pw.SizedBox(height: 18),
+          pw.Align(
+            alignment: pw.Alignment.centerRight,
+            child: pw.Container(
+              width: 220,
+              child: pw.Column(children: [
+                pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [pw.Text('Imponibile'), pw.Text('${imponibile.toStringAsFixed(2)} €')]),
+                pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [pw.Text('IVA ${ivaPercent.toStringAsFixed(2)}%'), pw.Text('${iva.toStringAsFixed(2)} €')]),
+                pw.Divider(color: gold),
+                pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
+                  pw.Text('TOTALE', style: pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold)),
+                  pw.Text('${totale.toStringAsFixed(2)} €', style: pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold, color: gold)),
+                ]),
+              ]),
+            ),
+          ),
+          pw.SizedBox(height: 20),
+          pw.Container(
+            width: double.infinity,
+            padding: const pw.EdgeInsets.all(10),
+            decoration: pw.BoxDecoration(border: pw.Border.all(color: PdfColor.fromHex('#D8C98A'))),
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Text('DATI AZIENDA', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: gold)),
+                pw.SizedBox(height: 4),
+                pw.Text('di CARPENTIERI ALFONSO', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                pw.Text('Sede legale: via Ugo Pirro, 9 - 84100 Salerno'),
+                pw.Text('Cell. 328 697 2865'),
+                pw.Text('P. IVA 06051430657'),
+              ],
+            ),
+          ),
+          pw.SizedBox(height: 10),
+          pw.Container(
+            padding: const pw.EdgeInsets.all(10),
+            decoration: pw.BoxDecoration(border: pw.Border.all(color: PdfColor.fromHex('#D8C98A'))),
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Text('Metodo di pagamento: $pagamento', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                if (pagamento == 'Bonifico' && (iban ?? '').trim().isNotEmpty)
+                  pw.Padding(
+                    padding: const pw.EdgeInsets.only(top: 4),
+                    child: pw.Text('IBAN: ${iban!.trim()}'),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+
+    await Printing.sharePdf(
+      bytes: await pdf.save(),
+      filename: 'Fattura_$numero.pdf',
+    );
+  }
+
 }
 
+class CreaFatturaScreen extends StatefulWidget {
+  final Map<String, dynamic>? preventivo;
+
+  const CreaFatturaScreen({super.key, this.preventivo});
+
+  @override
+  State<CreaFatturaScreen> createState() => _CreaFatturaScreenState();
+}
+
+class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
+  final _numero = TextEditingController();
+  final _iva = TextEditingController(text: '0');
+  final _cliente = TextEditingController();
+  final _iban = TextEditingController();
+  String? cliente;
+  String pagamento = 'Contanti';
+  final List<Map<String, dynamic>> articoli = [];
+  bool salvando = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _precompila();
+  }
+
+  Future<void> _precompila() async {
+    _numero.text = await DatabaseHelper.instance.prossimoNumeroFattura();
+    final p = widget.preventivo;
+    if (p != null) {
+      cliente = (p['cliente'] ?? '').toString();
+      _cliente.text = cliente ?? '';
+      _iva.text = ((p['iva_percent'] as num?)?.toDouble() ?? 0).toString();
+      try {
+        final raw = jsonDecode((p['articoli'] ?? '[]').toString());
+        if (raw is List) {
+          articoli.addAll(raw.map((e) => {
+            'nome': (e['nome'] ?? '').toString(),
+            'prezzo': (e['prezzo'] as num?)?.toDouble() ?? 0,
+            'quantita': (e['quantita'] as num?)?.toDouble() ?? 1,
+          }));
+        }
+      } catch (_) {}
+    }
+    if (mounted) setState(() {});
+  }
+
+  double get imponibile => articoli.fold<double>(0, (sum, x) {
+        final p = (x['prezzo'] as num?)?.toDouble() ?? 0;
+        final q = (x['quantita'] as num?)?.toDouble() ?? 1;
+        return sum + p * q;
+      });
+
+  double get ivaPercent => double.tryParse(_iva.text.replaceAll(',', '.')) ?? 0;
+  double get totale => imponibile + imponibile * ivaPercent / 100;
+
+  Future<void> _aggiungiProdotto() async {
+    final nome = TextEditingController();
+    final prezzo = TextEditingController();
+    final quantita = TextEditingController(text: '1');
+
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Aggiungi prodotto / servizio'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nome,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  labelText: 'Descrizione',
+                  hintText: 'Inserisci anche un materiale non presente in archivio',
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: prezzo,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Prezzo unitario €'),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: quantita,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Quantità'),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('ANNULLA')),
+          FilledButton(
+            onPressed: () {
+              final n = nome.text.trim();
+              final p = double.tryParse(prezzo.text.replaceAll(',', '.')) ?? 0;
+              final q = double.tryParse(quantita.text.replaceAll(',', '.')) ?? 1;
+              if (n.isEmpty || p < 0 || q <= 0) return;
+              Navigator.pop(ctx, {'nome': n, 'prezzo': p, 'quantita': q});
+            },
+            child: const Text('AGGIUNGI'),
+          ),
+        ],
+      ),
+    );
+    nome.dispose();
+    prezzo.dispose();
+    quantita.dispose();
+    if (result != null && mounted) {
+      setState(() => articoli.add(result));
+    }
+  }
+
+  Future<void> _salva() async {
+    if ((_numero.text.trim()).isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Inserisci il numero della fattura.')),
+      );
+      return;
+    }
+    cliente = _cliente.text.trim();
+    if (pagamento == 'Bonifico' && _iban.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Inserisci l\'IBAN per il pagamento con bonifico.')),
+      );
+      return;
+    }
+
+    setState(() => salvando = true);
+    try {
+      final numero = _numero.text.trim();
+      await DatabaseHelper.instance.insertFattura(
+        numero: numero,
+        cliente: cliente!,
+        articoli: articoli,
+        ivaPercent: ivaPercent,
+        totale: totale,
+        pagamento: pagamento,
+        iban: pagamento == 'Bonifico' ? _iban.text.trim() : null,
+      );
+      await PdfGenerator.generaECondividiFattura(
+        numero: numero,
+        cliente: cliente!,
+        articoli: articoli,
+        ivaPercent: ivaPercent,
+        pagamento: pagamento,
+        iban: pagamento == 'Bonifico' ? _iban.text.trim() : null,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Fattura salvata e PDF pronto per la condivisione.')),
+      );
+      Navigator.pop(context);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Errore: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => salvando = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _numero.dispose();
+    _iva.dispose();
+    _cliente.dispose();
+    _iban.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const gold = Color(0xFFD4AF37);
+    const darkGold = Color(0xFF9A7000);
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.preventivo == null ? 'Crea fattura' : 'Fattura da preventivo'),
+        actions: [
+          IconButton(
+            tooltip: 'Salva fattura',
+            onPressed: salvando ? null : _salva,
+            icon: const Icon(Icons.save_rounded),
+          ),
+        ],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 30),
+        children: [
+          if (widget.preventivo != null)
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.description_outlined),
+                title: const Text('Creata dal preventivo'),
+                subtitle: Text((widget.preventivo!['numero'] ?? '').toString()),
+              ),
+            ),
+          if (widget.preventivo != null) const SizedBox(height: 10),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  TextField(
+                    controller: _numero,
+                    decoration: const InputDecoration(
+                      labelText: 'Numero fattura',
+                      helperText: 'Progressivo modificabile e digitabile',
+                      prefixIcon: Icon(Icons.numbers_rounded),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _cliente,
+                    onChanged: (v) => cliente = v,
+                    decoration: const InputDecoration(
+                      labelText: 'Cliente',
+                      hintText: 'Inserisci il cliente oppure digita un nominativo',
+                      prefixIcon: Icon(Icons.person_outline, color: darkGold),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () async {
+                        final c = await selezionaCliente(context);
+                        if (c != null) {
+                          setState(() {
+                            cliente = c;
+                            _cliente.text = c;
+                          });
+                        }
+                      },
+                      icon: const Icon(Icons.search),
+                      label: const Text('Scegli dall\'archivio clienti (facoltativo)'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text('Prodotti / servizi',
+                      style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 8),
+                  if (articoli.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 18),
+                      child: Text('Nessun articolo aggiunto.'),
+                    ),
+                  ...List.generate(articoli.length, (i) {
+                    final a = articoli[i];
+                    final prezzo = (a['prezzo'] as num?)?.toDouble() ?? 0;
+                    final q = (a['quantita'] as num?)?.toDouble() ?? 1;
+                    return ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(a['nome'].toString()),
+                      subtitle: Text('${q.toStringAsFixed(q == q.roundToDouble() ? 0 : 2)} × ${prezzo.toStringAsFixed(2)} €'),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.delete_outline),
+                        onPressed: () => setState(() => articoli.removeAt(i)),
+                      ),
+                    );
+                  }),
+                  OutlinedButton.icon(
+                    onPressed: _aggiungiProdotto,
+                    icon: const Icon(Icons.add_rounded),
+                    label: const Text('Aggiungi prodotto / servizio'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  TextField(
+                    controller: _iva,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    onChanged: (_) => setState(() {}),
+                    decoration: const InputDecoration(
+                      labelText: 'IVA %',
+                      prefixIcon: Icon(Icons.percent_rounded),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    value: pagamento,
+                    decoration: const InputDecoration(
+                      labelText: 'Pagamento',
+                      prefixIcon: Icon(Icons.account_balance_wallet_outlined),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'Contanti', child: Text('Contanti')),
+                      DropdownMenuItem(value: 'Bonifico', child: Text('Bonifico')),
+                    ],
+                    onChanged: (v) => setState(() => pagamento = v ?? 'Contanti'),
+                  ),
+                  if (pagamento == 'Bonifico') ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _iban,
+                      keyboardType: TextInputType.text,
+                      decoration: const InputDecoration(
+                        labelText: 'IBAN',
+                        hintText: 'Inserisci IBAN',
+                        prefixIcon: Icon(Icons.account_balance),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Imponibile'),
+                      Text('${imponibile.toStringAsFixed(2)} €'),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('IVA (${ivaPercent.toStringAsFixed(2)}%)'),
+                      Text('${(totale - imponibile).toStringAsFixed(2)} €'),
+                    ],
+                  ),
+                  const Divider(height: 24),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('TOTALE',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+                      Text('${totale.toStringAsFixed(2)} €',
+                          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: gold)),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(backgroundColor: darkGold),
+            onPressed: salvando ? null : _salva,
+            icon: salvando
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.receipt_long_rounded),
+            label: const Text('CREA FATTURA E PDF'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class ListaFattureScreen extends StatefulWidget {
+  const ListaFattureScreen({super.key});
+
+  @override
+  State<ListaFattureScreen> createState() => _ListaFattureScreenState();
+}
+
+class _ListaFattureScreenState extends State<ListaFattureScreen> {
+  final _search = TextEditingController();
+  List<Map<String, dynamic>> fatture = [];
+  bool loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _search.addListener(() => setState(() {}));
+    _carica();
+  }
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  Future<void> _carica() async {
+    setState(() => loading = true);
+    final dati = await DatabaseHelper.instance.getFatture();
+    if (!mounted) return;
+    setState(() {
+      fatture = dati;
+      loading = false;
+    });
+  }
+
+  List<Map<String, dynamic>> get filtrate {
+    final q = _search.text.trim().toLowerCase();
+    if (q.isEmpty) return fatture;
+    return fatture.where((f) =>
+      (f['numero'] ?? '').toString().toLowerCase().contains(q) ||
+      (f['cliente'] ?? '').toString().toLowerCase().contains(q)
+    ).toList();
+  }
+
+  List<Map<String, dynamic>> _articoli(Map<String, dynamic> f) {
+    try {
+      final raw = jsonDecode((f['articoli'] ?? '[]').toString());
+      if (raw is! List) return [];
+      return raw.map((e) => {
+        'nome': (e['nome'] ?? '').toString(),
+        'prezzo': (e['prezzo'] as num?)?.toDouble() ?? 0,
+        'quantita': (e['quantita'] as num?)?.toDouble() ?? 1,
+      }).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> _elimina(Map<String, dynamic> f) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Eliminare la fattura?'),
+        content: Text('${f['numero']}\n${f['cliente']}'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('ANNULLA')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('ELIMINA')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await DatabaseHelper.instance.deleteFattura((f['id'] as num).toInt());
+    await _carica();
+  }
+
+  void _mostra(Map<String, dynamic> f) {
+    final data = DateTime.tryParse((f['data'] ?? '').toString()) ?? DateTime.now();
+    final articoli = _articoli(f);
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                const CircleAvatar(child: Icon(Icons.receipt_long)),
+                const SizedBox(width: 12),
+                Expanded(child: Text((f['numero'] ?? '').toString(), style: const TextStyle(fontSize: 21, fontWeight: FontWeight.bold))),
+                IconButton(onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.close)),
+              ]),
+              const Divider(height: 24),
+              ListTile(contentPadding: EdgeInsets.zero, leading: const Icon(Icons.person_outline), title: const Text('Cliente'), subtitle: Text((f['cliente'] ?? '').toString())),
+              ListTile(contentPadding: EdgeInsets.zero, leading: const Icon(Icons.calendar_today_outlined), title: const Text('Data'), subtitle: Text(DateFormat('dd/MM/yyyy').format(data))),
+              ListTile(contentPadding: EdgeInsets.zero, leading: const Icon(Icons.payments_outlined), title: const Text('Totale'), subtitle: Text('€ ${((f['totale'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}')),
+              if (articoli.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                const Text('Articoli', style: TextStyle(fontWeight: FontWeight.w800)),
+                const SizedBox(height: 4),
+                ...articoli.map((a) => ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(a['nome'].toString()),
+                  trailing: Text('${((a['prezzo'] as num).toDouble() * (a['quantita'] as num).toDouble()).toStringAsFixed(2)} €'),
+                )),
+              ],
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(child: FilledButton.icon(
+                  onPressed: () async {
+                    await PdfGenerator.generaECondividiFattura(
+                      numero: f['numero'].toString(),
+                      cliente: f['cliente'].toString(),
+                      articoli: articoli,
+                      ivaPercent: (f['iva_percent'] as num?)?.toDouble() ?? 0,
+                      pagamento: f['pagamento'].toString(),
+                      iban: (f['iban'] ?? '').toString(),
+                    );
+                  },
+                  icon: const Icon(Icons.picture_as_pdf),
+                  label: const Text('PDF'),
+                )),
+                const SizedBox(width: 10),
+                OutlinedButton.icon(onPressed: () async { Navigator.pop(ctx); await _elimina(f); }, icon: const Icon(Icons.delete_outline), label: const Text('ELIMINA')),
+              ]),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = filtrate;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Fatture'),
+        actions: [
+          IconButton(onPressed: _carica, icon: const Icon(Icons.refresh_rounded)),
+          IconButton(onPressed: () async {
+            await Navigator.push(context, MaterialPageRoute(builder: (_) => const CreaFatturaScreen()));
+            _carica();
+          }, icon: const Icon(Icons.add_rounded)),
+        ],
+      ),
+      body: RefreshIndicator(
+        onRefresh: _carica,
+        child: loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.fromLTRB(14, 14, 14, 24),
+              children: [
+                TextField(
+                  controller: _search,
+                  decoration: const InputDecoration(prefixIcon: Icon(Icons.search), labelText: 'Cerca fattura o cliente'),
+                ),
+                const SizedBox(height: 12),
+                if (items.isEmpty)
+                  const Padding(padding: EdgeInsets.all(30), child: Center(child: Text('Nessuna fattura salvata.')))
+                else
+                  ...items.map((f) {
+                    final data = DateTime.tryParse((f['data'] ?? '').toString()) ?? DateTime.now();
+                    return Card(
+                      child: ListTile(
+                        leading: const CircleAvatar(child: Icon(Icons.receipt_long_rounded)),
+                        title: Text((f['numero'] ?? '').toString(), style: const TextStyle(fontWeight: FontWeight.w800)),
+                        subtitle: Text('${f['cliente']}\n${DateFormat('dd/MM/yyyy').format(data)} • ${f['pagamento']}'),
+                        isThreeLine: true,
+                        trailing: Text('€ ${((f['totale'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                        onTap: () => _mostra(f),
+                      ),
+                    );
+                  }),
+              ],
+            ),
+      ),
+    );
+  }
+}
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -1031,8 +1593,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int preventivi = 0;
   int clienti = 0;
   int prodotti = 0;
-  int rate = 0;
+  int acconti = 0;
+  int fatture = 0;
   bool loading = true;
+
+  static const _gold = Color(0xFFD4AF37);
+  static const _darkGold = Color(0xFF9A7000);
+  static const _cream = Color(0xFFFFF9E8);
 
   @override
   void initState() {
@@ -1042,21 +1609,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> caricaStatistiche() async {
     final db = DatabaseHelper.instance;
-
     final results = await Future.wait([
       db.getPreventivi(),
       db.getClienti(),
       db.getProdotti(),
-      db.getRate(),
+      db.getAcconti(),
+      db.getFatture(),
     ]);
-
     if (!mounted) return;
-
     setState(() {
       preventivi = results[0].length;
       clienti = results[1].length;
       prodotti = results[2].length;
-      rate = results[3].length;
+      acconti = results[3].length;
+      fatture = results[4].length;
       loading = false;
     });
   }
@@ -1071,211 +1637,240 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final primary = Theme.of(context).colorScheme.primary;
-
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'Preventivi',
-          style: TextStyle(fontWeight: FontWeight.bold),
+          'PREVENTIVI',
+          style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 1.2),
         ),
-        centerTitle: true,
-        backgroundColor: primary,
-        foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            tooltip: 'Aggiorna',
+            onPressed: caricaStatistiche,
+            icon: const Icon(Icons.refresh_rounded),
+          ),
+        ],
       ),
       body: RefreshIndicator(
+        color: _darkGold,
         onRefresh: caricaStatistiche,
         child: ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(14, 14, 14, 24),
           children: [
+            // Azione principale sempre immediatamente disponibile.
             Card(
-              color: primary,
+              color: _gold,
               child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+                child: Row(
                   children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(10),
-                      child: Image.asset(
-                        'assets/logo.png',
-                        width: double.infinity,
-                        height: 150,
-                        fit: BoxFit.contain,
-                        filterQuality: FilterQuality.high,
+                    Container(
+                      width: 64,
+                      height: 64,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: .20),
+                        borderRadius: BorderRadius.circular(16),
                       ),
-                    ),
-                    const SizedBox(height: 14),
-                    const Text(
-                      'Gestione Preventivi',
-                      style: TextStyle(
+                      child: const Icon(
+                        Icons.receipt_long_rounded,
                         color: Colors.white,
-                        fontSize: 25,
-                        fontWeight: FontWeight.bold,
+                        size: 34,
                       ),
                     ),
-                    const SizedBox(height: 5),
-                    const Text(
-                      'Crea, salva e condividi i tuoi preventivi.',
-                      style: TextStyle(color: Colors.white70),
-                    ),
-                    const SizedBox(height: 18),
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton.icon(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: Colors.white,
-                          foregroundColor: primary,
-                        ),
-                        onPressed: () =>
-                            apri(const NuovoPreventivoScreen()),
-                        icon: const Icon(Icons.add),
-                        label: const Text(
-                          'NUOVO PREVENTIVO',
-                          style: TextStyle(fontWeight: FontWeight.bold),
-                        ),
+                    const SizedBox(width: 14),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Gestione Preventivi',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 21,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          SizedBox(height: 3),
+                          Text(
+                            'Crea e gestisci i tuoi preventivi',
+                            style: TextStyle(color: Colors.white),
+                          ),
+                        ],
                       ),
+                    ),
+                    IconButton.filled(
+                      style: IconButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: _darkGold,
+                        minimumSize: const Size(52, 52),
+                      ),
+                      tooltip: 'Nuovo preventivo',
+                      onPressed: () => apri(const NuovoPreventivoScreen()),
+                      icon: const Icon(Icons.add_rounded, size: 30),
                     ),
                   ],
                 ),
               ),
             ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: _statCard(
-                    Icons.receipt_long,
-                    'Preventivi',
-                    preventivi,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _statCard(
-                    Icons.people_alt_outlined,
-                    'Clienti',
-                    clienti,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: _statCard(
-                    Icons.inventory_2_outlined,
-                    'Prodotti',
-                    prodotti,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _statCard(
-                    Icons.payments_outlined,
-                    'Rate',
-                    rate,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              'Gestione',
-              style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 10),
-            _menuTile(
-              Icons.receipt_long,
-              'Lista preventivi',
-              'Visualizza i preventivi salvati',
-              () => apri(const ListaPreventiviScreen()),
-            ),
-            _menuTile(
-              Icons.people_alt_outlined,
-              'Clienti',
-              'Gestisci l’anagrafica clienti',
-              () => apri(const ClientiScreen()),
-            ),
-            _menuTile(
-              Icons.inventory_2_outlined,
-              'Prodotti / Servizi',
-              'Gestisci prodotti e prezzi',
-              () => apri(const ProdottiScreen()),
-            ),
-            _menuTile(
-              Icons.payments_outlined,
-              'Rate e scadenze',
-              'Controlla le rate programmate',
-              () => apri(const RateScreen()),
-            ),
-            _menuTile(
-              Icons.backup_outlined,
-              'Backup e dati',
-              'Esporta, importa e gestisci il backup',
-              () => apri(const BackupScreen()),
-            ),
-            _menuTile(
-              Icons.notifications_active_outlined,
-              'Notifiche',
-              'Abilita gli avvisi delle scadenze',
-              () => apri(const NotificheScreen()),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+            const SizedBox(height: 14),
 
-  Widget _statCard(IconData icon, String label, int value) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
-        child: Column(
-          children: [
-            Icon(
-              icon,
-              size: 30,
-              color: Theme.of(context).colorScheme.primary,
-            ),
-            const SizedBox(height: 7),
-            Text(
-              loading ? '…' : '$value',
-              style: const TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
+            const Padding(
+              padding: EdgeInsets.only(left: 2, bottom: 8),
+              child: Text(
+                'Riepilogo e accesso rapido',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
               ),
             ),
-            Text(label),
+            GridView.count(
+              crossAxisCount: 2,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              mainAxisSpacing: 10,
+              crossAxisSpacing: 10,
+              childAspectRatio: 1.38,
+              children: [
+                _statCard(
+                  Icons.receipt_long_rounded,
+                  'Preventivi',
+                  preventivi,
+                  () => apri(const ListaPreventiviScreen()),
+                ),
+                _statCard(
+                  Icons.receipt_long_rounded,
+                  'Fatture',
+                  fatture,
+                  () => apri(const ListaFattureScreen()),
+                ),
+                _statCard(
+                  Icons.people_alt_rounded,
+                  'Clienti',
+                  clienti,
+                  () => apri(const ClientiScreen()),
+                ),
+                _statCard(
+                  Icons.inventory_2_rounded,
+                  'Prodotti / Servizi',
+                  prodotti,
+                  () => apri(const ProdottiScreen()),
+                ),
+                _statCard(
+                  Icons.payments_rounded,
+                  'Acconti',
+                  acconti,
+                  () => apri(const AccontiScreen()),
+                ),
+                _actionCard(
+                  Icons.request_quote_rounded,
+                  'Crea fattura',
+                  () => apri(const CreaFatturaScreen()),
+                ),
+                _actionCard(
+                  Icons.backup_rounded,
+                  'Backup e dati',
+                  () => apri(const BackupScreen()),
+                ),
+              ],
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _menuTile(
+  Widget _statCard(
     IconData icon,
-    String title,
-    String subtitle,
+    String label,
+    int value,
     VoidCallback onTap,
   ) {
     return Card(
-      margin: const EdgeInsets.only(bottom: 9),
-      child: ListTile(
-        leading: CircleAvatar(child: Icon(icon)),
-        title: Text(
-          title,
-          style: const TextStyle(fontWeight: FontWeight.w600),
-        ),
-        subtitle: Text(subtitle),
-        trailing: const Icon(Icons.chevron_right),
+      color: Colors.white,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
         onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              Container(
+                width: 50,
+                height: 50,
+                decoration: BoxDecoration(
+                  color: _cream,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(icon, color: _darkGold, size: 29),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      loading ? '…' : '$value',
+                      style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    Text(
+                      label,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _actionCard(IconData icon, String title, VoidCallback onTap) {
+    return Card(
+      color: Colors.white,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 54,
+                height: 54,
+                decoration: BoxDecoration(
+                  color: _cream,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Icon(icon, size: 31, color: _darkGold),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13.5,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
 }
-
 
 
 Future<String?> selezionaCliente(BuildContext context) async {
@@ -1292,7 +1887,8 @@ Future<String?> selezionaCliente(BuildContext context) async {
             final nome = (c['nome'] ?? '').toString().toLowerCase();
             final piva = (c['partita_iva'] ?? '').toString().toLowerCase();
             final cf = (c['codice_fiscale'] ?? '').toString().toLowerCase();
-            return nome.contains(q) || piva.contains(q) || cf.contains(q);
+            final parrocchia = (c['parrocchia'] ?? '').toString().toLowerCase();
+            return nome.contains(q) || piva.contains(q) || cf.contains(q) || parrocchia.contains(q);
           }).toList();
           return AlertDialog(
             title: const Text('Seleziona cliente'),
@@ -1329,6 +1925,7 @@ Future<String?> selezionaCliente(BuildContext context) async {
                                 [
                                   filtrati[i]['telefono'],
                                   filtrati[i]['email'],
+                                  if ((filtrati[i]['parrocchia'] ?? '').toString().isNotEmpty) 'Parrocchia: ${filtrati[i]['parrocchia']}',
                                 ]
                                     .where((x) => (x ?? '').toString().isNotEmpty)
                                     .join(' • '),
@@ -1427,7 +2024,6 @@ Future<Map<String, dynamic>?> selezionaProdotto(BuildContext context) async {
   );
 }
 
-
 class NuovoPreventivoScreen extends StatefulWidget {
   const NuovoPreventivoScreen({super.key});
 
@@ -1440,8 +2036,7 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
   final prodottoController = TextEditingController();
   final prezzoController = TextEditingController();
   final quantitaController = TextEditingController(text: '1');
-
-  String get cliente => clienteController.text.trim();
+  final scontoController = TextEditingController(text: '0');
 
   final List<Map<String, dynamic>> articoli = [];
 
@@ -1449,17 +2044,6 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
   double ivaPercent = 22;
   bool accettato = false;
   bool busy = false;
-
-  late final TextEditingController scontoController;
-
-  double get scontoPercent =>
-      double.tryParse(scontoController.text.trim().replaceAll(',', '.')) ?? 0;
-
-  double get sconto =>
-      (imponibile * scontoPercent.clamp(0, 100) / 100);
-
-  double get imponibileScontato =>
-      (imponibile - sconto).clamp(0, double.infinity);
 
   double get imponibile => articoli.fold<double>(
         0,
@@ -1469,6 +2053,15 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
           return sum + (prezzo * quantita);
         },
       );
+
+  double get scontoPercent =>
+      double.tryParse(scontoController.text.trim().replaceAll(',', '.')) ?? 0;
+
+  double get sconto =>
+      (imponibile * scontoPercent.clamp(0, 100) / 100);
+
+  double get imponibileScontato =>
+      (imponibile - sconto).clamp(0, double.infinity).toDouble();
 
   double get iva => imponibileScontato * ivaPercent / 100;
 
@@ -1625,18 +2218,11 @@ Future<void> aggiungiAcconto() async {
   double get saldoResiduo => totale - totaleAcconti;
 
   @override
-  void initState() {
-    super.initState();
-    scontoController = TextEditingController();
-  }
-
-  @override
   void dispose() {
     clienteController.dispose();
     prodottoController.dispose();
     prezzoController.dispose();
     quantitaController.dispose();
-    scontoController.dispose();
     super.dispose();
   }
 
@@ -1666,9 +2252,22 @@ Future<void> aggiungiAcconto() async {
     });
   }
 
-
-
   Future<void> generaPreventivo() async {
+    if (busy) return;
+
+    final cliente = clienteController.text.trim();
+
+    if (cliente.isEmpty || articoli.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Inserisci il cliente e almeno un prodotto.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() => busy = true);
+
     try {
       final db = DatabaseHelper.instance;
       final numero = await db.prossimoNumeroPreventivo();
@@ -1704,26 +2303,9 @@ Future<void> aggiungiAcconto() async {
         scontoPercent: scontoPercent,
       );
 
-      final notificheProgrammate =
-          await NotificationService().programmaNotificheAcconti(
-        preventivoId: id,
-        cliente: cliente,
-        acconti: acconti,
-      );
-
-      final notificheOk = await NotificationService().notificheAbilitate();
-
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              notificheProgrammate > 0
-                  ? 'Preventivo $numero salvato. $notificheProgrammate notifiche programmate.'
-                  : (notificheOk
-                      ? 'Preventivo $numero salvato. Nessuna notifica programmata: controlla le date degli acconti.'
-                      : 'Preventivo $numero salvato. Abilita le notifiche per ricevere gli avvisi.'),
-            ),
-          ),
+          SnackBar(content: Text('Preventivo $numero salvato.')),
         );
         Navigator.pop(context);
       }
@@ -2053,158 +2635,6 @@ Future<void> aggiungiAcconto() async {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-
-
-class CreaFatturaScreen extends StatefulWidget {
-  final Map<String, dynamic> preventivo;
-  const CreaFatturaScreen({super.key, required this.preventivo});
-
-  @override
-  State<CreaFatturaScreen> createState() => _CreaFatturaScreenState();
-}
-
-class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
-  late final TextEditingController pagamentoController;
-  late final TextEditingController ibanController;
-  bool busy = false;
-
-  List<Map<String, dynamic>> get articoli {
-    final raw = widget.preventivo['articoli'];
-    if (raw is List) {
-      return raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-    }
-    try {
-      final decoded = jsonDecode(raw?.toString() ?? '[]');
-      if (decoded is List) {
-        return decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-      }
-    } catch (_) {}
-    return [];
-  }
-
-  double get ivaPercent => (widget.preventivo['iva_percent'] as num?)?.toDouble() ?? 0;
-  double get scontoPercent => (widget.preventivo['sconto_percent'] as num?)?.toDouble() ?? 0;
-  double get imponibile {
-    final v = articoli.fold<double>(0, (sum, x) {
-      final prezzo = (x['prezzo'] as num?)?.toDouble() ?? 0;
-      final q = (x['quantita'] as num?)?.toDouble() ?? 1;
-      return sum + prezzo * q;
-    });
-    return (v - v * scontoPercent.clamp(0, 100) / 100).clamp(0, double.infinity).toDouble();
-  }
-  double get iva => imponibile * ivaPercent / 100;
-  double get totale => imponibile + iva;
-
-  @override
-  void initState() {
-    super.initState();
-    pagamentoController = TextEditingController(text: 'Bonifico bancario');
-    ibanController = TextEditingController();
-  }
-
-  @override
-  void dispose() {
-    pagamentoController.dispose();
-    ibanController.dispose();
-    super.dispose();
-  }
-
-  Future<void> generaFattura() async {
-    if (busy) return;
-    setState(() => busy = true);
-    try {
-      final db = DatabaseHelper.instance;
-      final numero = await db.prossimoNumeroFattura();
-      await db.insertFattura(
-        numero: numero,
-        cliente: (widget.preventivo['cliente'] ?? '').toString(),
-        articoli: articoli,
-        ivaPercent: ivaPercent,
-        totale: totale,
-        pagamento: pagamentoController.text.trim(),
-        iban: ibanController.text.trim().isEmpty ? null : ibanController.text.trim(),
-      );
-
-      final pdf = pw.Document();
-      pw.MemoryImage? logo;
-      try {
-        final bytes = await rootBundle.load('assets/logo.png');
-        logo = pw.MemoryImage(Uint8List.fromList(bytes.buffer.asUint8List()));
-      } catch (_) {}
-      final gold = PdfColor.fromHex('#B8860B');
-      pdf.addPage(
-        pw.MultiPage(
-          pageFormat: PdfPageFormat.a4,
-          margin: const pw.EdgeInsets.all(30),
-          build: (_) => [
-            if (logo != null) pw.Center(child: pw.SizedBox(width: 260, height: 150, child: pw.Image(logo, fit: pw.BoxFit.contain))),
-            pw.Text('FATTURA', style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold)),
-            pw.Text('N. $numero'),
-            pw.Text('Data: ${DateFormat('dd/MM/yyyy').format(DateTime.now())}'),
-            pw.SizedBox(height: 18),
-            pw.Text('CLIENTE', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: gold)),
-            pw.Text((widget.preventivo['cliente'] ?? '').toString()),
-            pw.SizedBox(height: 18),
-            pw.TableHelper.fromTextArray(
-              headers: ['Descrizione', 'Q.tà', 'Prezzo', 'Totale'],
-              data: [
-                for (final a in articoli)
-                  [
-                    (a['nome'] ?? '').toString(),
-                    ((a['quantita'] as num?)?.toDouble() ?? 1).toStringAsFixed(2),
-                    '€ ${((a['prezzo'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}',
-                    '€ ${(((a['prezzo'] as num?)?.toDouble() ?? 0) * ((a['quantita'] as num?)?.toDouble() ?? 1)).toStringAsFixed(2)}',
-                  ],
-              ],
-            ),
-            pw.SizedBox(height: 18),
-            pw.Align(alignment: pw.Alignment.centerRight, child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
-              pw.Text('Imponibile: € ${imponibile.toStringAsFixed(2)}'),
-              if (scontoPercent > 0) pw.Text('Sconto ${scontoPercent.toStringAsFixed(0)}% incluso'),
-              pw.Text(ivaPercent == 0 ? 'FUORI CAMPO IVA FCI' : 'IVA ${ivaPercent.toStringAsFixed(0)}%: € ${iva.toStringAsFixed(2)}'),
-              pw.SizedBox(height: 6),
-              pw.Text('TOTALE: € ${totale.toStringAsFixed(2)}', style: pw.TextStyle(fontSize: 17, fontWeight: pw.FontWeight.bold, color: gold)),
-            ])),
-            pw.SizedBox(height: 20),
-            pw.Text('Pagamento: ${pagamentoController.text.trim()}'),
-            if (ibanController.text.trim().isNotEmpty) pw.Text('IBAN: ${ibanController.text.trim()}'),
-          ],
-        ),
-      );
-      await Printing.sharePdf(bytes: await pdf.save(), filename: 'Fattura_$numero.pdf');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Fattura $numero creata.')));
-        Navigator.pop(context);
-      }
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Errore fattura: $e')));
-    } finally {
-      if (mounted) setState(() => busy = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Crea fattura')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Text('Cliente: ${(widget.preventivo['cliente'] ?? '').toString()}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 16),
-          Text('Totale: € ${totale.toStringAsFixed(2)}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 16),
-          TextField(controller: pagamentoController, decoration: const InputDecoration(labelText: 'Tipo di pagamento')),
-          const SizedBox(height: 12),
-          TextField(controller: ibanController, decoration: const InputDecoration(labelText: 'IBAN (facoltativo)')),
-          const SizedBox(height: 24),
-          FilledButton.icon(onPressed: busy ? null : generaFattura, icon: const Icon(Icons.receipt_long), label: Text(busy ? 'CREAZIONE...' : 'CREA E CONDIVIDI FATTURA')),
-        ],
       ),
     );
   }
@@ -2649,8 +3079,6 @@ class _ModificaPreventivoScreenState
   final prodottoController = TextEditingController();
   final prezzoController = TextEditingController();
   final quantitaController = TextEditingController(text: '1');
-
-  String get cliente => clienteController.text.trim();
   late final TextEditingController scontoController;
 
   late List<Map<String, dynamic>> articoli;
@@ -2993,26 +3421,9 @@ Future<void> aggiungiAcconto() async {
         scontoPercent: scontoPercent,
       );
 
-      final notificheProgrammate =
-          await NotificationService().programmaNotificheAcconti(
-        preventivoId: preventivoId,
-        cliente: cliente,
-        acconti: acconti,
-      );
-
-      final notificheOk = await NotificationService().notificheAbilitate();
-
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              notificheProgrammate > 0
-                  ? 'Preventivo modificato. PDF rigenerato e $notificheProgrammate notifiche programmate.'
-                  : (notificheOk
-                      ? 'Preventivo modificato. Nessuna notifica programmata: controlla le date degli acconti.'
-                      : 'Preventivo modificato. Abilita le notifiche per ricevere gli avvisi.'),
-            ),
-          ),
+          const SnackBar(content: Text('Preventivo modificato e PDF rigenerato.')),
         );
         Navigator.pop(context);
       }
@@ -4196,93 +4607,6 @@ class _BackupScreenState extends State<BackupScreen> {
   }
 }
 
-class NotificheScreen extends StatefulWidget {
-  const NotificheScreen({super.key});
-
-  @override
-  State<NotificheScreen> createState() => _NotificheScreenState();
-}
-
-class _NotificheScreenState extends State<NotificheScreen> {
-  bool? abilitate;
-  bool loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _aggiorna();
-  }
-
-  Future<void> _aggiorna() async {
-    final stato = await NotificationService().notificheAbilitate();
-    if (!mounted) return;
-    setState(() {
-      abilitate = stato;
-      loading = false;
-    });
-  }
-
-  Future<void> _abilita() async {
-    setState(() => loading = true);
-    await NotificationService().richiediPermessi();
-    await _aggiorna();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Notifiche e scadenze')),
-      body: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Icon(
-              abilitate == true
-                  ? Icons.notifications_active
-                  : Icons.notifications_off,
-              size: 70,
-              color: Theme.of(context).colorScheme.primary,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              loading
-                  ? 'Controllo autorizzazioni...'
-                  : abilitate == true
-                      ? 'Notifiche abilitate'
-                      : 'Notifiche non abilitate',
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 21,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              abilitate == true
-                  ? 'Le scadenze delle acconti possono essere segnalate automaticamente.'
-                  : 'Per ricevere gli avvisi delle acconti, abilita le notifiche per questa app nelle impostazioni di Android.',
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: loading ? null : _abilita,
-              icon: const Icon(Icons.notifications_active),
-              label: const Text('ABILITA / RICHIEDI PERMESSI'),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'Nota: Android può richiedere anche il permesso per gli allarmi esatti. Se viene negato, l’app utilizza comunque il sistema di notifica non esatto quando possibile.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class AccontiScreen extends StatelessWidget {
   const AccontiScreen({super.key});
 
@@ -4333,79 +4657,6 @@ class AccontiScreen extends StatelessWidget {
                   trailing: Text(
                     '€ ${(x['importo'] as num).toStringAsFixed(2)}',
                     style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                ),
-              );
-            },
-          );
-        },
-      ),
-    );
-  }
-}
-
-class RateScreen extends StatelessWidget {
-  const RateScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Rate e scadenze'),
-      ),
-      body: FutureBuilder<List<Map<String, dynamic>>>(
-        future: DatabaseHelper.instance.getRate(),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) {
-            return const Center(
-              child: CircularProgressIndicator(),
-            );
-          }
-
-          final rate = snapshot.data!;
-
-          if (rate.isEmpty) {
-            return const _EmptyState(
-              icon: Icons.payments_outlined,
-              text: 'Nessuna rata programmata.',
-            );
-          }
-
-          return ListView.separated(
-            padding: const EdgeInsets.all(12),
-            itemCount: rate.length,
-            separatorBuilder: (_, __) =>
-                const SizedBox(height: 8),
-            itemBuilder: (context, index) {
-              final x = rate[index];
-
-              final data = DateTime.parse(
-                x['data_scadenza'],
-              );
-
-              final pagata = x['pagata'] == 1;
-
-              return Card(
-                child: ListTile(
-                  leading: CircleAvatar(
-                    child: Icon(
-                      pagata
-                          ? Icons.check
-                          : Icons.schedule,
-                    ),
-                  ),
-                  title: Text(
-                    x['cliente'],
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  subtitle: Text(
-                    'Scadenza: '
-                    '${DateFormat('dd/MM/yyyy').format(data)}',
-                  ),
-                  trailing: Text(
-                    '€ ${(x['importo'] as num).toStringAsFixed(2)}',
                   ),
                 ),
               );
