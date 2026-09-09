@@ -559,9 +559,7 @@ CREATE TABLE fatture (
 }
 class NotificationService {
   static final NotificationService _instance = NotificationService._internal();
-
   factory NotificationService() => _instance;
-
   NotificationService._internal();
 
   final FlutterLocalNotificationsPlugin _notifications =
@@ -570,54 +568,19 @@ class NotificationService {
   static const String _channelId = 'acconti_channel';
   static const String _channelName = 'Scadenze rate';
   static const String _channelDescription =
-      'Avvisi il giorno prima delle scadenze mensili delle rate';
+      'Avvisi il giorno prima delle scadenze delle rate';
 
-  Future<AndroidFlutterLocalNotificationsPlugin?> _android() async {
-    return _notifications.resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin>();
-  }
-
-  Future<bool> richiediPermessi() async {
-    final android = await _android();
-    if (android == null) return false;
-    try {
-      await android.requestNotificationsPermission();
-    } catch (_) {}
-    try {
-      await android.requestExactAlarmsPermission();
-    } catch (_) {}
-    return notificheAbilitate();
-  }
-
-  Future<bool> notificheAbilitate() async {
-    final android = await _android();
-    if (android == null) return false;
-    return await android.areNotificationsEnabled() ?? false;
-  }
-
-  Future<bool> preparaPermessi() async {
-    final android = await _android();
-    if (android == null) return false;
-    var abilitate = await notificheAbilitate();
-    if (!abilitate) {
-      try {
-        await android.requestNotificationsPermission();
-      } catch (_) {}
-      abilitate = await notificheAbilitate();
-    }
-    // L'allarme esatto è solo un'ottimizzazione: se non viene concesso,
-    // la programmazione usa automaticamente il modo non esatto.
-    try {
-      await android.requestExactAlarmsPermission();
-    } catch (_) {}
-    return abilitate;
-  }
+  Future<AndroidFlutterLocalNotificationsPlugin?> _android() async =>
+      _notifications.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
 
   Future<void> init() async {
     tz_data.initializeTimeZones();
     try {
       tz.setLocalLocation(tz.getLocation('Europe/Rome'));
-    } catch (_) {}
+    } catch (_) {
+      tz.setLocalLocation(tz.UTC);
+    }
 
     const settings = InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
@@ -636,10 +599,30 @@ class NotificationService {
         ),
       );
     }
+  }
 
-    // Non chiediamo permessi qui: su Android la richiesta deve partire da una
-    // schermata visibile/azione dell'utente. Verranno richiesti quando si salva
-    // una rata o premendo 'ABILITA / RICHIEDI PERMESSI'.
+  Future<bool> notificheAbilitate() async {
+    final android = await _android();
+    if (android == null) return false;
+    return await android.areNotificationsEnabled() ?? false;
+  }
+
+  Future<bool> preparaPermessi() async {
+    final android = await _android();
+    if (android == null) return false;
+
+    var abilitate = await notificheAbilitate();
+    if (!abilitate) {
+      try {
+        await android.requestNotificationsPermission();
+      } catch (_) {}
+      abilitate = await notificheAbilitate();
+    }
+
+    // Non rendiamo il permesso degli allarmi esatti obbligatorio.
+    // Le notifiche vengono programmate con il sistema INEXACT, compatibile
+    // anche quando Android non concede SCHEDULE_EXACT_ALARM.
+    return abilitate;
   }
 
   DateTime? _parseDataScadenza(String value) {
@@ -648,7 +631,11 @@ class NotificationService {
     try {
       return DateFormat('dd/MM/yyyy').parseStrict(text);
     } catch (_) {
-      return DateTime.tryParse(text);
+      try {
+        return DateTime.parse(text);
+      } catch (_) {
+        return null;
+      }
     }
   }
 
@@ -657,9 +644,10 @@ class NotificationService {
 
   Future<void> cancellaNotifichePreventivo(int preventivoId) async {
     final richieste = await _notifications.pendingNotificationRequests();
-    final prefix = preventivoId * 1000;
+    final minId = preventivoId * 1000;
+    final maxId = minId + 999;
     for (final richiesta in richieste) {
-      if (richiesta.id > prefix && richiesta.id <= prefix + 1000) {
+      if (richiesta.id > minId && richiesta.id <= maxId) {
         await _notifications.cancel(richiesta.id);
       }
     }
@@ -671,14 +659,10 @@ class NotificationService {
     required List<Map<String, dynamic>> acconti,
   }) async {
     await cancellaNotifichePreventivo(preventivoId);
-
-    // Prima di programmare chiediamo i permessi, se necessari. Non usiamo
-    // 'areNotificationsEnabled' come blocco definitivo: Android può consentire
-    // la programmazione anche prima che lo stato venga aggiornato.
     await preparaPermessi();
 
-    var programmate = 0;
     final now = tz.TZDateTime.now(tz.local);
+    var programmate = 0;
 
     for (var i = 0; i < acconti.length; i++) {
       final rata = acconti[i];
@@ -686,8 +670,8 @@ class NotificationService {
       final importo = (rata['importo'] as num?)?.toDouble() ?? 0;
       if (data == null || importo <= 0) continue;
 
-      // Avviso il giorno PRIMA della scadenza, alle 09:00 (ora italiana).
-      var quando = tz.TZDateTime(
+      // La notifica deve arrivare il giorno precedente alle 09:00.
+      final quando = tz.TZDateTime(
         tz.local,
         data.year,
         data.month,
@@ -695,62 +679,54 @@ class NotificationService {
         9,
       ).subtract(const Duration(days: 1));
 
-      // Se la data è oggi, l'avviso sarebbe ieri: non programmarlo nel passato.
-      if (quando.isBefore(now)) continue;
+      // Una rata già scaduta/non più notificabile non viene programmata.
+      if (!quando.isAfter(now)) continue;
 
       final id = _notificationId(preventivoId, i);
+      final dettagli = NotificationDetails(
+        android: AndroidNotificationDetails(
+          _channelId,
+          _channelName,
+          channelDescription: _channelDescription,
+          importance: Importance.max,
+          priority: Priority.high,
+          category: AndroidNotificationCategory.reminder,
+          enableVibration: true,
+          playSound: true,
+        ),
+      );
+
       try {
+        // INEXACT è intenzionale: non richiede il permesso per gli allarmi
+        // esatti e funziona anche sui dispositivi Android recenti.
         await _notifications.zonedSchedule(
           id,
           'Rata in scadenza domani',
           'Domani scade la rata di €${importo.toStringAsFixed(2)} per $cliente.',
           quando,
-          const NotificationDetails(
-            android: AndroidNotificationDetails(
-              _channelId,
-              _channelName,
-              channelDescription: _channelDescription,
-              importance: Importance.max,
-              priority: Priority.high,
-              category: AndroidNotificationCategory.reminder,
-            ),
-          ),
-          androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+          dettagli,
+          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
           uiLocalNotificationDateInterpretation:
               UILocalNotificationDateInterpretation.absoluteTime,
         );
         programmate++;
-      } catch (_) {
-        try {
-          await _notifications.zonedSchedule(
-            id,
-            'Rata in scadenza domani',
-            'Domani scade la rata di €${importo.toStringAsFixed(2)} per $cliente.',
-            quando,
-            const NotificationDetails(
-              android: AndroidNotificationDetails(
-                _channelId,
-                _channelName,
-                channelDescription: _channelDescription,
-                importance: Importance.max,
-                priority: Priority.high,
-                category: AndroidNotificationCategory.reminder,
-              ),
-            ),
-            androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-            uiLocalNotificationDateInterpretation:
-                UILocalNotificationDateInterpretation.absoluteTime,
-          );
-          programmate++;
-        } catch (_) {}
+      } catch (e) {
+        // Non nascondiamo completamente l'errore: se la programmazione fallisce
+        // l'utente vedrà il numero reale (0) nella schermata notifiche.
+        debugPrint('Errore programmazione notifica $id: $e');
       }
     }
-    return programmate;
+
+    // Verifica reale: contiamo solo gli ID che Android mantiene tra i pending.
+    final pending = await _notifications.pendingNotificationRequests();
+    final ids = <int>{
+      for (var i = 0; i < acconti.length; i++) _notificationId(preventivoId, i),
+    };
+    return pending.where((n) => ids.contains(n.id)).length;
   }
 
-  Future<List<PendingNotificationRequest>> programmate() async {
-    return _notifications.pendingNotificationRequests();
-  }
+  Future<List<PendingNotificationRequest>> programmate() async =>
+      _notifications.pendingNotificationRequests();
 }
 
 class PdfGenerator {
