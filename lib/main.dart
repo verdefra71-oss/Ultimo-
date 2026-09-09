@@ -828,7 +828,7 @@ class PdfGenerator {
                         );
                     return pw.Text(
                       saldo <= 0.005
-                          ? 'Saldo residuo: SALDATO'
+                          ? 'PAGATO'
                           : 'Saldo residuo: € ${saldo.toStringAsFixed(2)}',
                     );
                   })(),
@@ -3434,7 +3434,7 @@ Future<void> aggiungiAcconto() async {
         (sum, a) => sum + ((a['importo'] as num?)?.toDouble() ?? 0),
       );
       if (totale - totaleAcconti <= 0.005) {
-        acconti = [];
+        acconti.clear();
       }
 
       final updated = await db.updatePreventivo(
