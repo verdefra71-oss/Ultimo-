@@ -59,9 +59,12 @@ jobs:
           from pathlib import Path
           p = Path("android/app/src/main/AndroidManifest.xml")
           s = p.read_text()
-          permission = '<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>'
+          permission = '    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />'
           if permission not in s:
-              s = s.replace('<manifest ', '<manifest ' + '\\n    ' + permission, 1)
+              end = s.find('>')
+              if end == -1 or not s.lstrip().startswith('<manifest'):
+                  raise SystemExit("AndroidManifest.xml non contiene un tag <manifest> valido")
+              s = s[:end + 1] + "\n" + permission + s[end + 1:]
               p.write_text(s)
           print("Permesso notifiche configurato:", p)
           PY
