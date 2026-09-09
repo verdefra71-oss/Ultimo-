@@ -614,17 +614,20 @@ class NotificationService {
     final android = await _android();
     if (android == null) return false;
 
-    var abilitate = await notificheAbilitate();
-    if (!abilitate) {
-      try {
-        final richiesto = await android.requestNotificationsPermission();
-        debugPrint('Permesso notifiche richiesto: $richiesto');
-      } catch (e) {
-        debugPrint('Errore richiesta permesso notifiche: $e');
-      }
+    try {
+      var abilitate = await notificheAbilitate();
+      if (abilitate) return true;
+
+      // Android 13+: mostra la richiesta di autorizzazione solo quando
+      // l'utente entra nella sezione Notifiche o salva una scadenza.
+      final richiesto = await android.requestNotificationsPermission();
+      debugPrint('Permesso POST_NOTIFICATIONS richiesto: $richiesto');
       abilitate = await notificheAbilitate();
+      return abilitate;
+    } catch (e, st) {
+      debugPrint('Errore autorizzazione notifiche: $e\n$st');
+      return false;
     }
-    return abilitate;
   }
 
   DateTime? _parseDataScadenza(String value) {
@@ -2504,12 +2507,18 @@ Future<void> aggiungiAcconto() async {
         scontoPercent: scontoPercent,
       );
 
-      final notificheProgrammate = await NotificationService().programmaNotificheRate(
-        preventivoId: id,
-        cliente: cliente,
-        acconti: acconti,
-      );
-      final notificheOk = await NotificationService().notificheAbilitate();
+      int notificheProgrammate = 0;
+      bool notificheOk = false;
+      try {
+        notificheProgrammate = await NotificationService().programmaNotificheRate(
+          preventivoId: id,
+          cliente: cliente,
+          acconti: acconti,
+        );
+        notificheOk = await NotificationService().notificheAbilitate();
+      } catch (e) {
+        debugPrint('Errore notifiche dopo salvataggio preventivo: $e');
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -2517,7 +2526,7 @@ Future<void> aggiungiAcconto() async {
             content: Text(
               notificheOk
                   ? 'Preventivo $numero salvato: $notificheProgrammate notifiche programmate.'
-                  : 'Preventivo $numero salvato. Abilita le notifiche per ricevere gli avvisi.',
+                  : 'Preventivo $numero salvato. Le notifiche non sono abilitate: attivale nella sezione Notifiche.',
             ),
           ),
         );
@@ -3500,22 +3509,34 @@ Future<void> aggiungiAcconto() async {
             throw Exception('Preventivo non trovato nel database.');
           }
 
-          final notificheProgrammate = await NotificationService().programmaNotificheRate(
-            preventivoId: preventivoId,
-            cliente: clienteController.text.trim(),
-            acconti: nuovaLista,
-          );
+          int notificheProgrammate = 0;
+          String? erroreNotifiche;
+          try {
+            notificheProgrammate = await NotificationService().programmaNotificheRate(
+              preventivoId: preventivoId,
+              cliente: clienteController.text.trim(),
+              acconti: nuovaLista,
+            );
+          } catch (e) {
+            // Un problema delle notifiche NON deve annullare il salvataggio
+            // dell'acconto: il dato è già stato scritto nel database.
+            erroreNotifiche = e.toString();
+            debugPrint('Notifica acconto: $e');
+          }
 
           if (mounted) {
             setState(() {
               acconti = List<Map<String, dynamic>>.from(nuovaLista);
             });
+            final testo = aggiunti.length == 1
+                ? 'Acconto aggiunto e salvato.'
+                : '${aggiunti.length} acconti aggiunti e salvati.';
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(
-                  aggiunti.length == 1
-                      ? 'Acconto aggiunto e salvato. $notificheProgrammate notifica/e programmate.'
-                      : '${aggiunti.length} acconti aggiunti e salvati. $notificheProgrammate notifiche programmate.',
+                  erroreNotifiche != null
+                      ? '$testo Notifiche non abilitate: abilita i permessi nella sezione Notifiche.'
+                      : '$testo $notificheProgrammate notifiche programmate.',
                 ),
               ),
             );
