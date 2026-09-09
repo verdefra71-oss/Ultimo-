@@ -199,7 +199,7 @@ class DatabaseHelper {
 
     return openDatabase(
       p.join(dbPath, fileName),
-      version: 11,
+      version: 12,
       onCreate: (db, version) async {
         await db.execute('''
 CREATE TABLE clienti (
@@ -323,6 +323,11 @@ CREATE TABLE fatture (
         if (oldVersion < 11) {
           await db.execute("ALTER TABLE preventivi ADD COLUMN pagato INTEGER NOT NULL DEFAULT 0");
         }
+        if (oldVersion < 12) {
+          // Normalizza i vecchi preventivi: garantisce che i campi usati
+          // dalla schermata Modifica siano sempre valorizzati.
+          await db.execute("UPDATE preventivi SET accettato = COALESCE(accettato, 0), pagato = COALESCE(pagato, 0), acconti = COALESCE(acconti, '[]')");
+        }
       },
     );
   }
@@ -341,6 +346,8 @@ CREATE TABLE fatture (
     final risultato = <Map<String, dynamic>>[];
 
     for (final p in preventivi) {
+      // Gli acconti/saldi riguardano esclusivamente preventivi accettati.
+      if ((p['accettato'] as num?)?.toInt() != 1) continue;
       if ((p['pagato'] as num?)?.toInt() == 1) continue;
 
       final totale = (p['totale'] as num?)?.toDouble() ?? 0;
@@ -378,10 +385,8 @@ CREATE TABLE fatture (
     final risultato = <Map<String, dynamic>>[];
 
     for (final p in preventivi) {
-      // Gli acconti appartengono alla fase di ricevuta:
-      // un preventivo non accettato non deve comparire nella sezione Acconti.
+      // Mostra gli acconti solo se il preventivo è stato accettato.
       if ((p['accettato'] as num?)?.toInt() != 1) continue;
-
       try {
         final raw = jsonDecode((p['acconti'] ?? '[]').toString());
         if (raw is List) {
@@ -686,19 +691,6 @@ CREATE TABLE fatture (
     final fatture = List<Map<String, dynamic>>.from(
       (decoded['fatture'] as List? ?? []).map((e) => Map<String, dynamic>.from(e)),
     );
-    // Compatibilità con i vecchi backup: i preventivi creati prima
-    // dell'introduzione del campo "Pagato" devono avere comunque un valore
-    // esplicito, così la casella Pagato è sempre disponibile in modifica.
-    for (final row in preventivi) {
-      row['accettato'] = (row['accettato'] as num?)?.toInt() ?? 0;
-      row['acconti'] = row['acconti'] ?? '[]';
-      row['sconto_percent'] = (row['sconto_percent'] as num?)?.toDouble() ?? 0;
-      row['pagato'] = (row['pagato'] as num?)?.toInt() ?? 0;
-      row['iva_percent'] = (row['iva_percent'] as num?)?.toDouble() ?? 0;
-      row['articoli'] = row['articoli'] ?? '[]';
-      row['numero_rate'] = (row['numero_rate'] as num?)?.toInt() ?? 0;
-    }
-
     final db = await database;
     await db.transaction((txn) async {
       await txn.delete('preventivi');
@@ -3528,13 +3520,6 @@ Future<void> aggiungiAcconto() async {
         0, (sum, a) => sum + ((a['importo'] as num?)?.toDouble() ?? 0));
   double get saldoResiduo => totale - totaleAcconti;
 
-  bool _flagValue(dynamic value) {
-    if (value is bool) return value;
-    if (value is num) return value.toInt() == 1;
-    return value?.toString().toLowerCase() == 'true' ||
-        value?.toString() == '1';
-  }
-
   @override
   void initState() {
     super.initState();
@@ -3549,8 +3534,8 @@ Future<void> aggiungiAcconto() async {
     acconti = _parseAcconti(widget.preventivo['acconti']);
     ivaPercent =
         (widget.preventivo['iva_percent'] as num?)?.toDouble() ?? 0;
-    accettato = _flagValue(widget.preventivo['accettato']);
-    pagato = _flagValue(widget.preventivo['pagato']);
+    accettato = (widget.preventivo['accettato'] as num?)?.toInt() == 1;
+    pagato = (widget.preventivo['pagato'] as num?)?.toInt() == 1;
 
     try {
       final raw = jsonDecode(
@@ -3944,6 +3929,24 @@ Future<void> aggiungiAcconto() async {
                     ],
                   ],
                 ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Questo controllo deve restare visibile anche sui vecchi preventivi
+            // già generati: lo stato viene letto dal campo pagato del database.
+            Card(
+              child: CheckboxListTile(
+                value: pagato,
+                onChanged: (v) => setState(() => pagato = v ?? false),
+                title: const Text(
+                  'Pagato',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                subtitle: const Text(
+                  'Considera il preventivo completamente pagato e bypassa il calcolo degli acconti.',
+                ),
+                secondary: const Icon(Icons.paid_outlined),
+                controlAffinity: ListTileControlAffinity.leading,
               ),
             ),
             const SizedBox(height: 12),
