@@ -747,7 +747,7 @@ class NotificationService {
         (c) =>
             (c['nome'] as String).toLowerCase() ==
             cliente.toLowerCase(),
-      )) {
+      ) {
         await db.insertCliente(nome: cliente);
       }
 
