@@ -14,10 +14,16 @@ import 'package:path_provider/path_provider.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:timezone/data/latest.dart' as tz;
+import 'package:timezone/timezone.dart' as tz;
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await NotificationService.instance.initialize();
   await DatabaseHelper.instance.createAutomaticBackup();
+  await NotificationService.instance.refreshMonthlyReminder();
   runApp(const PreventiviApp());
 }
 
@@ -74,6 +80,104 @@ class PreventiviApp extends StatelessWidget {
         ),
       ),
       home: const DashboardScreen(),
+    );
+  }
+}
+
+
+class NotificationService {
+  NotificationService._();
+  static final NotificationService instance = NotificationService._();
+
+  final FlutterLocalNotificationsPlugin _plugin =
+      FlutterLocalNotificationsPlugin();
+  static const _enabledKey = 'monthly_acconti_notifications_enabled';
+  static const _notificationId = 7001;
+
+  Future<void> initialize() async {
+    tz.initializeTimeZones();
+    tz.setLocalLocation(tz.getLocation('Europe/Rome'));
+
+    const android = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const darwin = DarwinInitializationSettings();
+    const settings = InitializationSettings(
+      android: android,
+      iOS: darwin,
+      macOS: darwin,
+    );
+
+    await _plugin.initialize(settings);
+  }
+
+  Future<bool> requestPermission() async {
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    final granted = await android?.requestNotificationsPermission();
+    return granted ?? true;
+  }
+
+  Future<bool> isEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_enabledKey) ?? false;
+  }
+
+  Future<void> setEnabled(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_enabledKey, enabled);
+
+    if (!enabled) {
+      await _plugin.cancel(_notificationId);
+      return;
+    }
+
+    await requestPermission();
+    await refreshMonthlyReminder();
+  }
+
+  Future<void> refreshMonthlyReminder() async {
+    if (!await isEnabled()) return;
+
+    final saldi = await DatabaseHelper.instance.getPreventiviDaSaldare();
+    await _plugin.cancel(_notificationId);
+
+    if (saldi.isEmpty) return;
+
+    final totale = saldi.fold<double>(
+      0,
+      (sum, p) => sum + ((p['saldo'] as num?)?.toDouble() ?? 0),
+    );
+
+    final now = tz.TZDateTime.now(tz.local);
+    var next = tz.TZDateTime(tz.local, now.year, now.month, 1, 9);
+    if (!next.isAfter(now)) {
+      final nextMonth = now.month == 12 ? 1 : now.month + 1;
+      final nextYear = now.month == 12 ? now.year + 1 : now.year;
+      next = tz.TZDateTime(tz.local, nextYear, nextMonth, 1, 9);
+    }
+
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'acconti_mensili',
+        'Acconti non saldati',
+        channelDescription:
+            'Promemoria mensile per i preventivi con saldo ancora da incassare.',
+        importance: Importance.high,
+        priority: Priority.high,
+      ),
+      iOS: DarwinNotificationDetails(),
+      macOS: DarwinNotificationDetails(),
+    );
+
+    await _plugin.zonedSchedule(
+      _notificationId,
+      'Acconti da saldare',
+      saldi.length == 1
+          ? 'Hai 1 preventivo con saldo di € ${totale.toStringAsFixed(2)} da incassare.'
+          : 'Hai ${saldi.length} preventivi con saldo totale di € ${totale.toStringAsFixed(2)} da incassare.',
+      next,
+      details,
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      matchDateTimeComponents: DateTimeComponents.dayOfMonthAndTime,
     );
   }
 }
@@ -229,6 +333,40 @@ CREATE TABLE fatture (
 
   Future<List<Map<String, dynamic>>> getPreventivi() async {
     return (await database).query('preventivi', orderBy: 'id DESC');
+  }
+
+  /// Preventivi che hanno ancora un saldo da incassare.
+  Future<List<Map<String, dynamic>>> getPreventiviDaSaldare() async {
+    final preventivi = await getPreventivi();
+    final risultato = <Map<String, dynamic>>[];
+
+    for (final p in preventivi) {
+      if ((p['pagato'] as num?)?.toInt() == 1) continue;
+
+      final totale = (p['totale'] as num?)?.toDouble() ?? 0;
+      double totaleAcconti = 0;
+
+      try {
+        final raw = jsonDecode((p['acconti'] ?? '[]').toString());
+        if (raw is List) {
+          for (final item in raw) {
+            if (item is Map) {
+              totaleAcconti += (item['importo'] as num?)?.toDouble() ?? 0;
+            }
+          }
+        }
+      } catch (_) {}
+
+      final saldo = totale - totaleAcconti;
+      if (saldo > 0.005) {
+        risultato.add({
+          ...p,
+          'saldo': saldo,
+        });
+      }
+    }
+
+    return risultato;
   }
 
   Future<List<Map<String, dynamic>>> getProdotti() async {
@@ -433,6 +571,7 @@ CREATE TABLE fatture (
       'pagato': pagato ? 1 : 0,
     });
     await autoBackup();
+    await NotificationService.instance.refreshMonthlyReminder();
     return id;
   }
 
@@ -456,6 +595,7 @@ CREATE TABLE fatture (
       whereArgs: [id],
     );
     await autoBackup();
+    await NotificationService.instance.refreshMonthlyReminder();
     return result;
   }
 
@@ -1789,6 +1929,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   Icons.backup_rounded,
                   'Backup e dati',
                   () => apri(const BackupScreen()),
+                ),
+                _actionCard(
+                  Icons.notifications_active_rounded,
+                  'Notifiche',
+                  () => apri(const NotificheScreen()),
                 ),
               ],
             ),
@@ -4526,6 +4671,119 @@ class _ProdottiScreenState extends State<ProdottiScreen> {
 }
 
 
+
+
+class NotificheScreen extends StatefulWidget {
+  const NotificheScreen({super.key});
+
+  @override
+  State<NotificheScreen> createState() => _NotificheScreenState();
+}
+
+class _NotificheScreenState extends State<NotificheScreen> {
+  bool enabled = false;
+  bool loading = true;
+  List<Map<String, dynamic>> daSaldare = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _carica();
+  }
+
+  Future<void> _carica() async {
+    final value = await NotificationService.instance.isEnabled();
+    final saldi = await DatabaseHelper.instance.getPreventiviDaSaldare();
+    if (!mounted) return;
+    setState(() {
+      enabled = value;
+      daSaldare = saldi;
+      loading = false;
+    });
+  }
+
+  Future<void> _toggle(bool value) async {
+    if (value) {
+      final granted = await NotificationService.instance.requestPermission();
+      if (!granted) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Permesso notifiche non concesso. Abilitalo nelle impostazioni di Android.'),
+          ),
+        );
+        return;
+      }
+    }
+
+    await NotificationService.instance.setEnabled(value);
+    await _carica();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Notifiche')),
+      body: loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                Card(
+                  child: SwitchListTile(
+                    value: enabled,
+                    onChanged: _toggle,
+                    secondary: const Icon(Icons.notifications_active_outlined),
+                    title: const Text(
+                      'Promemoria mensile acconti',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: const Text(
+                      'Il giorno 1 di ogni mese alle 09:00 ricorda i preventivi che hanno ancora un saldo da incassare.',
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Card(
+                  child: ListTile(
+                    leading: CircleAvatar(
+                      child: Text('${daSaldare.length}'),
+                    ),
+                    title: const Text(
+                      'Preventivi con saldo da incassare',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text(
+                      daSaldare.isEmpty
+                          ? 'Nessun saldo da incassare.'
+                          : 'Il prossimo promemoria verrà inviato solo se questi saldi risultano ancora aperti.',
+                    ),
+                  ),
+                ),
+                if (daSaldare.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  ...daSaldare.map(
+                    (p) => Card(
+                      child: ListTile(
+                        leading: const Icon(Icons.payments_outlined),
+                        title: Text(
+                          '${p['cliente']} • ${p['numero']}',
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        subtitle: const Text('Saldo ancora da incassare'),
+                        trailing: Text(
+                          '€ ${(p['saldo'] as num).toStringAsFixed(2)}',
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+    );
+  }
+}
 
 class BackupScreen extends StatefulWidget {
   const BackupScreen({super.key});
