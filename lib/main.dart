@@ -630,7 +630,7 @@ class NotificationService {
 
       abilitate = await notificheAbilitate();
       if (!abilitate) {
-        debugPrint('POST_NOTIFICATIONS ancora disabilitato: l'utente deve abilitarlo nelle impostazioni Android.');
+        debugPrint("POST_NOTIFICATIONS ancora disabilitato: l'utente deve abilitarlo nelle impostazioni Android.");
       }
       return abilitate;
     } catch (e, st) {
