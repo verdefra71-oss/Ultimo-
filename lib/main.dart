@@ -2291,7 +2291,7 @@ Future<void> aggiungiAcconto() async {
       );
       if (totale - totaleAcconti <= 0.005) {
         accontiDaSalvare.clear();
-        acconti = [];
+        acconti.clear();
       }
 
       final id = await db.insertPreventivo(
