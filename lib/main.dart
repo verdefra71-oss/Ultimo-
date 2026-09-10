@@ -4035,42 +4035,81 @@ class _ClientiScreenState extends State<ClientiScreen> {
     required String nome,
     required String comune,
   }) async {
-    final query = '$nome, $comune, Italia';
-    final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
-      'q': query,
-      'format': 'jsonv2',
-      'addressdetails': '1',
-      'limit': '10',
-      'countrycodes': 'it',
-      'accept-language': 'it',
-    });
-
-    final response = await http.get(uri, headers: {
-      'User-Agent': 'GestionePreventivi/1.1 (ricerca parrocchie)',
-      'Accept': 'application/json',
-    });
-
-    if (response.statusCode != 200) {
-      throw Exception('Servizio di ricerca non disponibile');
-    }
-
-    final decoded = jsonDecode(response.body);
-    if (decoded is! List) return [];
+    // Nominatim può classificare una chiesa/parrocchia in modi diversi e
+    // spesso il nome ufficiale non coincide esattamente con quello digitato.
+    // Per questo eseguiamo più ricerche e uniamo i risultati, invece di
+    // scartare tutto quando la prima ricerca non restituisce una chiesa.
+    final queries = <String>[
+      '$nome, $comune, Italia',
+      'Parrocchia $nome, $comune, Italia',
+      'Chiesa $nome, $comune, Italia',
+      '$nome $comune, Italia',
+    ];
 
     final risultati = <Map<String, dynamic>>[];
-    for (final item in decoded) {
-      if (item is! Map) continue;
-      final map = Map<String, dynamic>.from(item);
-      final type = (map['type'] ?? '').toString().toLowerCase();
-      final category = (map['category'] ?? '').toString().toLowerCase();
-      final display = (map['display_name'] ?? '').toString();
-      final isChurch = category == 'amenity' &&
-              (type == 'place_of_worship' || type == 'church') ||
-          display.toLowerCase().contains('parrocch');
-      if (!isChurch) continue;
-      risultati.add(map);
+    final chiavi = <String>{};
+
+    for (final query in queries) {
+      final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
+        'q': query,
+        'format': 'jsonv2',
+        'addressdetails': '1',
+        'namedetails': '1',
+        'extratags': '1',
+        'limit': '10',
+        'countrycodes': 'it',
+        'accept-language': 'it',
+      });
+
+      final response = await http.get(uri, headers: {
+        'User-Agent': 'GestionePreventivi/1.2 (ricerca parrocchie)',
+        'Accept': 'application/json',
+      });
+
+      if (response.statusCode != 200) continue;
+
+      final decoded = jsonDecode(response.body);
+      if (decoded is! List) continue;
+
+      for (final item in decoded) {
+        if (item is! Map) continue;
+        final map = Map<String, dynamic>.from(item);
+        final type = (map['type'] ?? '').toString().toLowerCase();
+        final category = (map['category'] ?? '').toString().toLowerCase();
+        final display = (map['display_name'] ?? '').toString().toLowerCase();
+        final nameResult = (map['name'] ?? '').toString().toLowerCase();
+        final namedetails = (map['namedetails'] is Map)
+            ? Map<String, dynamic>.from(map['namedetails'] as Map)
+            : <String, dynamic>{};
+        final names = namedetails.values.join(' ').toLowerCase();
+
+        final isLuogoDiCulto =
+            (category == 'amenity' && type == 'place_of_worship') ||
+            (category == 'amenity' && type == 'church') ||
+            type == 'church' ||
+            type == 'place_of_worship' ||
+            display.contains('parrocch') ||
+            display.contains('chiesa') ||
+            display.contains('basilica') ||
+            display.contains('santuario') ||
+            display.contains('duomo') ||
+            nameResult.contains('parrocch') ||
+            nameResult.contains('chiesa') ||
+            names.contains('parrocch') ||
+            names.contains('chiesa');
+
+        if (!isLuogoDiCulto) continue;
+
+        final id = '${map['osm_type']}:${map['osm_id']}';
+        if (chiavi.add(id)) risultati.add(map);
+      }
+
+      // Se abbiamo già trovato risultati pertinenti, non martelliamo il
+      // servizio con tutte le query successive.
+      if (risultati.length >= 10) break;
     }
-    return risultati;
+
+    return risultati.take(10).toList();
   }
 
   Future<void> _cercaParrocchiaOnline({
