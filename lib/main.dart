@@ -4035,80 +4035,109 @@ class _ClientiScreenState extends State<ClientiScreen> {
     required String nome,
     required String comune,
   }) async {
-    // Nominatim può classificare una chiesa/parrocchia in modi diversi e
-    // spesso il nome ufficiale non coincide esattamente con quello digitato.
-    // Per questo eseguiamo più ricerche e uniamo i risultati, invece di
-    // scartare tutto quando la prima ricerca non restituisce una chiesa.
-    final queries = <String>[
-      '$nome, $comune, Italia',
-      'Parrocchia $nome, $comune, Italia',
-      'Chiesa $nome, $comune, Italia',
-      '$nome $comune, Italia',
-    ];
+    // Ricerca volutamente ampia: Nominatim non classifica tutte le
+    // parrocchie allo stesso modo. Non scartiamo quindi un risultato solo
+    // perché è classificato come "place", "building", "amenity", ecc.
+    final nomePulito = nome.trim();
+    final comunePulito = comune.trim();
+
+    final queries = <String>{
+      '$nomePulito, $comunePulito, Italia',
+      '$nomePulito $comunePulito',
+      'Parrocchia $nomePulito, $comunePulito',
+      'Chiesa $nomePulito, $comunePulito',
+      '$nomePulito, $comunePulito',
+    }.where((q) => q.trim().isNotEmpty).toList();
 
     final risultati = <Map<String, dynamic>>[];
     final chiavi = <String>{};
+    String? ultimoErrore;
 
     for (final query in queries) {
-      final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
-        'q': query,
-        'format': 'jsonv2',
-        'addressdetails': '1',
-        'namedetails': '1',
-        'extratags': '1',
-        'limit': '10',
-        'countrycodes': 'it',
-        'accept-language': 'it',
-      });
+      try {
+        final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
+          'q': query,
+          'format': 'jsonv2',
+          'addressdetails': '1',
+          'namedetails': '1',
+          'extratags': '1',
+          'limit': '10',
+          'countrycodes': 'it',
+          'accept-language': 'it',
+        });
 
-      final response = await http.get(uri, headers: {
-        'User-Agent': 'GestionePreventivi/1.2 (ricerca parrocchie)',
-        'Accept': 'application/json',
-      });
+        final response = await http.get(
+          uri,
+          headers: const {
+            'User-Agent': 'GestionePreventivi/1.3',
+            'Accept': 'application/json',
+          },
+        ).timeout(const Duration(seconds: 12));
 
-      if (response.statusCode != 200) continue;
+        if (response.statusCode != 200) {
+          ultimoErrore = 'HTTP ${response.statusCode}';
+          continue;
+        }
 
-      final decoded = jsonDecode(response.body);
-      if (decoded is! List) continue;
+        final decoded = jsonDecode(response.body);
+        if (decoded is! List) continue;
 
-      for (final item in decoded) {
-        if (item is! Map) continue;
-        final map = Map<String, dynamic>.from(item);
-        final type = (map['type'] ?? '').toString().toLowerCase();
-        final category = (map['category'] ?? '').toString().toLowerCase();
-        final display = (map['display_name'] ?? '').toString().toLowerCase();
-        final nameResult = (map['name'] ?? '').toString().toLowerCase();
-        final namedetails = (map['namedetails'] is Map)
-            ? Map<String, dynamic>.from(map['namedetails'] as Map)
-            : <String, dynamic>{};
-        final names = namedetails.values.join(' ').toLowerCase();
+        for (final item in decoded) {
+          if (item is! Map) continue;
+          final map = Map<String, dynamic>.from(item);
 
-        final isLuogoDiCulto =
-            (category == 'amenity' && type == 'place_of_worship') ||
-            (category == 'amenity' && type == 'church') ||
-            type == 'church' ||
-            type == 'place_of_worship' ||
-            display.contains('parrocch') ||
-            display.contains('chiesa') ||
-            display.contains('basilica') ||
-            display.contains('santuario') ||
-            display.contains('duomo') ||
-            nameResult.contains('parrocch') ||
-            nameResult.contains('chiesa') ||
-            names.contains('parrocch') ||
-            names.contains('chiesa');
+          final osmType = (map['osm_type'] ?? '').toString();
+          final osmId = (map['osm_id'] ?? '').toString();
+          final display = (map['display_name'] ?? '').toString();
 
-        if (!isLuogoDiCulto) continue;
+          // Diamo priorità a chiese/parrocchie, ma manteniamo anche
+          // risultati che Nominatim ha classificato in modo diverso.
+          final text = [
+            map['name'],
+            map['type'],
+            map['category'],
+            display,
+            if (map['namedetails'] is Map)
+              ...(map['namedetails'] as Map).values,
+          ].join(' ').toLowerCase();
 
-        final id = '${map['osm_type']}:${map['osm_id']}';
-        if (chiavi.add(id)) risultati.add(map);
+          final culto = text.contains('parrocch') ||
+              text.contains('chiesa') ||
+              text.contains('basilica') ||
+              text.contains('santuario') ||
+              text.contains('duomo') ||
+              text.contains('church') ||
+              text.contains('place_of_worship') ||
+              text.contains('cattedrale') ||
+              text.contains('cathedral');
+
+          final key = '$osmType:$osmId:$display';
+          if (chiavi.add(key)) {
+            map['_culto'] = culto;
+            risultati.add(map);
+          }
+        }
+      } catch (e) {
+        ultimoErrore = e.toString();
       }
-
-      // Se abbiamo già trovato risultati pertinenti, non martelliamo il
-      // servizio con tutte le query successive.
-      if (risultati.length >= 10) break;
     }
 
+    // Prima i risultati riconosciuti come luoghi di culto, poi gli altri.
+    risultati.sort((a, b) {
+      final ac = a['_culto'] == true ? 0 : 1;
+      final bc = b['_culto'] == true ? 0 : 1;
+      if (ac != bc) return ac.compareTo(bc);
+
+      final an = (a['name'] ?? '').toString().toLowerCase();
+      final bn = (b['name'] ?? '').toString().toLowerCase();
+      final nq = nomePulito.toLowerCase();
+      final am = an.contains(nq) ? 0 : 1;
+      final bm = bn.contains(nq) ? 0 : 1;
+      return am.compareTo(bm);
+    });
+
+    // Se il servizio ha risposto ma non ha trovato nulla, restituiamo vuoto.
+    // L'eventuale errore viene gestito dal chiamante.
     return risultati.take(10).toList();
   }
 
