@@ -3,8 +3,6 @@ import 'dart:typed_data';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
@@ -532,6 +530,34 @@ CREATE TABLE fatture (
     });
     await autoBackup();
     return id;
+  }
+
+  Future<int> updateFattura({
+    required int id,
+    required String numero,
+    required String cliente,
+    required List<Map<String, dynamic>> articoli,
+    required double ivaPercent,
+    required double totale,
+    required String pagamento,
+    String? iban,
+  }) async {
+    final result = await (await database).update(
+      'fatture',
+      {
+        'numero': numero,
+        'cliente': cliente,
+        'articoli': jsonEncode(articoli),
+        'iva_percent': ivaPercent,
+        'totale': totale,
+        'pagamento': pagamento,
+        'iban': iban,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    await autoBackup();
+    return result;
   }
 
   Future<int> deleteFattura(int id) async {
@@ -1108,7 +1134,7 @@ class PdfGenerator {
                     ),
                   pw.SizedBox(height: 6),
                   pw.Text(
-                    'FATTURA',
+                    'FATTURA PRO-FORMA',
                     style: pw.TextStyle(
                       fontSize: 20,
                       fontWeight: pw.FontWeight.bold,
@@ -1182,10 +1208,10 @@ class PdfGenerator {
               crossAxisAlignment: pw.CrossAxisAlignment.start,
               children: [
                 pw.Text('Metodo di pagamento: $pagamento', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-                if (pagamento == 'Bonifico' && (iban ?? '').trim().isNotEmpty)
+                if (pagamento == 'Bonifico')
                   pw.Padding(
                     padding: const pw.EdgeInsets.only(top: 4),
-                    child: pw.Text('IBAN: ${iban!.trim()}'),
+                    child: pw.Text('IBAN: ${((iban ?? '').trim().isEmpty ? 'IT28F0538715206000003630167' : iban!.trim())}'),
                   ),
               ],
             ),
@@ -1196,7 +1222,7 @@ class PdfGenerator {
 
     await Printing.sharePdf(
       bytes: await pdf.save(),
-      filename: 'Fattura_$numero.pdf',
+      filename: 'Fattura_Pro-Forma_$numero.pdf',
     );
   }
 
@@ -1204,8 +1230,9 @@ class PdfGenerator {
 
 class CreaFatturaScreen extends StatefulWidget {
   final Map<String, dynamic>? preventivo;
+  final Map<String, dynamic>? fattura;
 
-  const CreaFatturaScreen({super.key, this.preventivo});
+  const CreaFatturaScreen({super.key, this.preventivo, this.fattura});
 
   @override
   State<CreaFatturaScreen> createState() => _CreaFatturaScreenState();
@@ -1228,14 +1255,16 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
   }
 
   Future<void> _precompila() async {
-    _numero.text = await DatabaseHelper.instance.prossimoNumeroFattura();
-    final p = widget.preventivo;
-    if (p != null) {
-      cliente = (p['cliente'] ?? '').toString();
+    final f = widget.fattura;
+    if (f != null) {
+      _numero.text = (f['numero'] ?? '').toString();
+      cliente = (f['cliente'] ?? '').toString();
       _cliente.text = cliente ?? '';
-      _iva.text = ((p['iva_percent'] as num?)?.toDouble() ?? 0).toString();
+      _iva.text = ((f['iva_percent'] as num?)?.toDouble() ?? 0).toString();
+      pagamento = (f['pagamento'] ?? 'Contanti').toString();
+      _iban.text = (f['iban'] ?? '').toString();
       try {
-        final raw = jsonDecode((p['articoli'] ?? '[]').toString());
+        final raw = jsonDecode((f['articoli'] ?? '[]').toString());
         if (raw is List) {
           articoli.addAll(raw.map((e) => {
             'nome': (e['nome'] ?? '').toString(),
@@ -1244,6 +1273,24 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
           }));
         }
       } catch (_) {}
+    } else {
+      _numero.text = await DatabaseHelper.instance.prossimoNumeroFattura();
+      final p = widget.preventivo;
+      if (p != null) {
+        cliente = (p['cliente'] ?? '').toString();
+        _cliente.text = cliente ?? '';
+        _iva.text = ((p['iva_percent'] as num?)?.toDouble() ?? 0).toString();
+        try {
+          final raw = jsonDecode((p['articoli'] ?? '[]').toString());
+          if (raw is List) {
+            articoli.addAll(raw.map((e) => {
+              'nome': (e['nome'] ?? '').toString(),
+              'prezzo': (e['prezzo'] as num?)?.toDouble() ?? 0,
+              'quantita': (e['quantita'] as num?)?.toDouble() ?? 1,
+            }));
+          }
+        } catch (_) {}
+      }
     }
     if (mounted) setState(() {});
   }
@@ -1334,26 +1381,41 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
     setState(() => salvando = true);
     try {
       final numero = _numero.text.trim();
-      await DatabaseHelper.instance.insertFattura(
-        numero: numero,
-        cliente: cliente!,
-        articoli: articoli,
-        ivaPercent: ivaPercent,
-        totale: totale,
-        pagamento: pagamento,
-        iban: pagamento == 'Bonifico' ? _iban.text.trim() : null,
-      );
+      if (widget.fattura != null) {
+        await DatabaseHelper.instance.updateFattura(
+          id: (widget.fattura!['id'] as num).toInt(),
+          numero: numero,
+          cliente: cliente!,
+          articoli: articoli,
+          ivaPercent: ivaPercent,
+          totale: totale,
+          pagamento: pagamento,
+          iban: pagamento == 'Bonifico' ? _iban.text.trim() : null,
+        );
+      } else {
+        await DatabaseHelper.instance.insertFattura(
+          numero: numero,
+          cliente: cliente!,
+          articoli: articoli,
+          ivaPercent: ivaPercent,
+          totale: totale,
+          pagamento: pagamento,
+          iban: pagamento == 'Bonifico' ? _iban.text.trim() : null,
+        );
+      }
       await PdfGenerator.generaECondividiFattura(
         numero: numero,
         cliente: cliente!,
         articoli: articoli,
         ivaPercent: ivaPercent,
         pagamento: pagamento,
-        iban: pagamento == 'Bonifico' ? _iban.text.trim() : null,
+        iban: pagamento == 'Bonifico'
+            ? (_iban.text.trim().isEmpty ? 'IT28F0538715206000003630167' : _iban.text.trim())
+            : null,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Fattura salvata e PDF pronto per la condivisione.')),
+        SnackBar(content: Text(widget.fattura != null ? 'Fattura modificata e PDF pronto per la condivisione.' : 'Fattura salvata e PDF pronto per la condivisione.')),
       );
       Navigator.pop(context);
     } catch (e) {
@@ -1382,7 +1444,7 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
     const darkGold = Color(0xFF9A7000);
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.preventivo == null ? 'Crea fattura' : 'Fattura da preventivo'),
+        title: Text(widget.fattura != null ? 'Modifica fattura' : (widget.preventivo == null ? 'Crea fattura' : 'Fattura da preventivo')),
         actions: [
           IconButton(
             tooltip: 'Salva fattura',
@@ -1511,7 +1573,12 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
                       DropdownMenuItem(value: 'Contanti', child: Text('Contanti')),
                       DropdownMenuItem(value: 'Bonifico', child: Text('Bonifico')),
                     ],
-                    onChanged: (v) => setState(() => pagamento = v ?? 'Contanti'),
+                    onChanged: (v) => setState(() {
+                      pagamento = v ?? 'Contanti';
+                      if (pagamento == 'Bonifico' && _iban.text.trim().isEmpty) {
+                        _iban.text = 'IT28F0538715206000003630167';
+                      }
+                    }),
                   ),
                   if (pagamento == 'Bonifico') ...[
                     const SizedBox(height: 12),
@@ -1562,7 +1629,7 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
             icon: salvando
                 ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.receipt_long_rounded),
-            label: const Text('CREA FATTURA E PDF'),
+            label: Text(widget.fattura != null ? 'SALVA MODIFICHE E PDF' : 'CREA FATTURA E PDF'),
           ),
         ],
       ),
@@ -1681,6 +1748,21 @@ class _ListaFattureScreenState extends State<ListaFattureScreen> {
               ],
               const SizedBox(height: 8),
               Row(children: [
+                Expanded(child: OutlinedButton.icon(
+                  onPressed: () async {
+                    Navigator.pop(ctx);
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => CreaFatturaScreen(fattura: f),
+                      ),
+                    );
+                    await _carica();
+                  },
+                  icon: const Icon(Icons.edit_outlined),
+                  label: const Text('MODIFICA'),
+                )),
+                const SizedBox(width: 10),
                 Expanded(child: FilledButton.icon(
                   onPressed: () async {
                     await PdfGenerator.generaECondividiFattura(
@@ -4031,258 +4113,6 @@ class _ClientiScreenState extends State<ClientiScreen> {
     }
   }
 
-  Future<List<Map<String, dynamic>>> _cercaParrocchieOnline({
-    required String nome,
-    required String comune,
-  }) async {
-    // Ricerca volutamente ampia: Nominatim non classifica tutte le
-    // parrocchie allo stesso modo. Non scartiamo quindi un risultato solo
-    // perché è classificato come "place", "building", "amenity", ecc.
-    final nomePulito = nome.trim();
-    final comunePulito = comune.trim();
-
-    final queries = <String>{
-      '$nomePulito, $comunePulito, Italia',
-      '$nomePulito $comunePulito',
-      'Parrocchia $nomePulito, $comunePulito',
-      'Chiesa $nomePulito, $comunePulito',
-      '$nomePulito, $comunePulito',
-    }.where((q) => q.trim().isNotEmpty).toList();
-
-    final risultati = <Map<String, dynamic>>[];
-    final chiavi = <String>{};
-    String? ultimoErrore;
-
-    for (final query in queries) {
-      try {
-        final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
-          'q': query,
-          'format': 'jsonv2',
-          'addressdetails': '1',
-          'namedetails': '1',
-          'extratags': '1',
-          'limit': '10',
-          'countrycodes': 'it',
-          'accept-language': 'it',
-        });
-
-        final response = await http.get(
-          uri,
-          headers: const {
-            'User-Agent': 'GestionePreventivi/1.3',
-            'Accept': 'application/json',
-          },
-        ).timeout(const Duration(seconds: 12));
-
-        if (response.statusCode != 200) {
-          ultimoErrore = 'HTTP ${response.statusCode}';
-          continue;
-        }
-
-        final decoded = jsonDecode(response.body);
-        if (decoded is! List) continue;
-
-        for (final item in decoded) {
-          if (item is! Map) continue;
-          final map = Map<String, dynamic>.from(item);
-
-          final osmType = (map['osm_type'] ?? '').toString();
-          final osmId = (map['osm_id'] ?? '').toString();
-          final display = (map['display_name'] ?? '').toString();
-
-          // Diamo priorità a chiese/parrocchie, ma manteniamo anche
-          // risultati che Nominatim ha classificato in modo diverso.
-          final text = [
-            map['name'],
-            map['type'],
-            map['category'],
-            display,
-            if (map['namedetails'] is Map)
-              ...(map['namedetails'] as Map).values,
-          ].join(' ').toLowerCase();
-
-          final culto = text.contains('parrocch') ||
-              text.contains('chiesa') ||
-              text.contains('basilica') ||
-              text.contains('santuario') ||
-              text.contains('duomo') ||
-              text.contains('church') ||
-              text.contains('place_of_worship') ||
-              text.contains('cattedrale') ||
-              text.contains('cathedral');
-
-          final key = '$osmType:$osmId:$display';
-          if (chiavi.add(key)) {
-            map['_culto'] = culto;
-            risultati.add(map);
-          }
-        }
-      } catch (e) {
-        ultimoErrore = e.toString();
-      }
-    }
-
-    // Prima i risultati riconosciuti come luoghi di culto, poi gli altri.
-    risultati.sort((a, b) {
-      final ac = a['_culto'] == true ? 0 : 1;
-      final bc = b['_culto'] == true ? 0 : 1;
-      if (ac != bc) return ac.compareTo(bc);
-
-      final an = (a['name'] ?? '').toString().toLowerCase();
-      final bn = (b['name'] ?? '').toString().toLowerCase();
-      final nq = nomePulito.toLowerCase();
-      final am = an.contains(nq) ? 0 : 1;
-      final bm = bn.contains(nq) ? 0 : 1;
-      return am.compareTo(bm);
-    });
-
-    // Se il servizio ha risposto ma non ha trovato nulla, restituiamo vuoto.
-    // L'eventuale errore viene gestito dal chiamante.
-    return risultati.take(10).toList();
-  }
-
-  Future<void> _cercaParrocchiaOnline({
-    required TextEditingController nome,
-    required TextEditingController comune,
-    required TextEditingController indirizzo,
-    required TextEditingController telefono,
-    required TextEditingController parrocchia,
-  }) async {
-    final nomeRicerca = nome.text.trim().isNotEmpty
-        ? nome.text.trim()
-        : parrocchia.text.trim();
-    final comuneRicerca = comune.text.trim();
-
-    if (nomeRicerca.isEmpty || comuneRicerca.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Inserisci nome della parrocchia e comune.')),
-      );
-      return;
-    }
-
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const AlertDialog(
-        content: Row(
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(width: 18),
-            Expanded(child: Text('Cerco la parrocchia online...')),
-          ],
-        ),
-      ),
-    );
-
-    try {
-      final risultati = await _cercaParrocchieOnline(
-        nome: nomeRicerca,
-        comune: comuneRicerca,
-      );
-      if (mounted) Navigator.of(context, rootNavigator: true).pop();
-
-      if (!mounted) return;
-      if (risultati.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Nessuna parrocchia trovata. Prova con un nome più preciso.')),
-        );
-        return;
-      }
-
-      final scelta = await showDialog<Map<String, dynamic>>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Parrocchie trovate'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: ListView.separated(
-              shrinkWrap: true,
-              itemCount: risultati.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
-              itemBuilder: (_, i) {
-                final r = risultati[i];
-                final address = Map<String, dynamic>.from(
-                  (r['address'] as Map?) ?? <String, dynamic>{},
-                );
-                final comuneTrovato = (address['city'] ??
-                        address['town'] ??
-                        address['village'] ??
-                        address['municipality'] ??
-                        '')
-                    .toString();
-                final road = (address['road'] ?? '').toString();
-                final house = (address['house_number'] ?? '').toString();
-                final indirizzoTrovato = [
-                  if (road.isNotEmpty) road,
-                  if (house.isNotEmpty) house,
-                  if (comuneTrovato.isNotEmpty) comuneTrovato,
-                ].join(', ');
-                return ListTile(
-                  leading: const Icon(Icons.church_outlined),
-                  title: Text(
-                    (r['name'] ?? r['display_name'] ?? 'Parrocchia').toString(),
-                  ),
-                  subtitle: Text(
-                    indirizzoTrovato.isNotEmpty
-                        ? indirizzoTrovato
-                        : (r['display_name'] ?? '').toString(),
-                  ),
-                  onTap: () => Navigator.pop(ctx, r),
-                );
-              },
-            ),
-          ),
-        ),
-      );
-
-      if (scelta == null) return;
-      final address = Map<String, dynamic>.from(
-        (scelta['address'] as Map?) ?? <String, dynamic>{},
-      );
-      final nomeTrovato = (scelta['name'] ?? '').toString().trim();
-      final display = (scelta['display_name'] ?? '').toString();
-      final comuneTrovato = (address['city'] ??
-              address['town'] ??
-              address['village'] ??
-              address['municipality'] ??
-              '')
-          .toString();
-      final road = (address['road'] ?? '').toString();
-      final house = (address['house_number'] ?? '').toString();
-      final cap = (address['postcode'] ?? '').toString();
-      final provincia = (address['state'] ?? address['county'] ?? '').toString();
-      final phone = (address['phone'] ?? '').toString();
-      final indirizzoTrovato = [
-        if (road.isNotEmpty) road,
-        if (house.isNotEmpty) house,
-        if (cap.isNotEmpty) cap,
-        if (comuneTrovato.isNotEmpty) comuneTrovato,
-        if (provincia.isNotEmpty) provincia,
-      ].join(', ');
-
-      if (nomeTrovato.isNotEmpty) {
-        nome.text = nomeTrovato;
-        parrocchia.text = nomeTrovato;
-      } else if (display.isNotEmpty) {
-        parrocchia.text = display.split(',').first.trim();
-      }
-      comune.text = comuneTrovato.isNotEmpty ? comuneTrovato : comune.text;
-      indirizzo.text = indirizzoTrovato;
-      if (phone.isNotEmpty) telefono.text = phone;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Dati della parrocchia compilati. Controllali prima di salvare.')),
-      );
-    } catch (_) {
-      if (mounted) Navigator.of(context, rootNavigator: true).pop();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Non riesco a collegarmi al servizio online. Controlla la connessione.')),
-        );
-      }
-    }
-  }
-
   Future<void> _formCliente([Map<String, dynamic>? cliente]) async {
     final nome = TextEditingController(text: cliente?['nome'] ?? '');
     final telefono =
@@ -4296,7 +4126,6 @@ class _ClientiScreenState extends State<ClientiScreen> {
         TextEditingController(text: cliente?['codice_fiscale'] ?? '');
     final parrocchia =
         TextEditingController(text: cliente?['parrocchia'] ?? '');
-    final comune = TextEditingController();
     final key = GlobalKey<FormState>();
 
     await showModalBottomSheet(
@@ -4340,32 +4169,8 @@ class _ClientiScreenState extends State<ClientiScreen> {
                   controller: parrocchia,
                   textCapitalization: TextCapitalization.words,
                   decoration: const InputDecoration(
-                    labelText: 'Parrocchia / Chiesa',
+                    labelText: 'Parrocchia',
                     prefixIcon: Icon(Icons.church_outlined),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: comune,
-                  textCapitalization: TextCapitalization.words,
-                  decoration: const InputDecoration(
-                    labelText: 'Comune',
-                    prefixIcon: Icon(Icons.location_city_outlined),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: () => _cercaParrocchiaOnline(
-                      nome: nome,
-                      comune: comune,
-                      indirizzo: indirizzo,
-                      telefono: telefono,
-                      parrocchia: parrocchia,
-                    ),
-                    icon: const Icon(Icons.travel_explore),
-                    label: const Text('CERCA PARROCCHIA ONLINE'),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -4469,7 +4274,6 @@ class _ClientiScreenState extends State<ClientiScreen> {
     partitaIva.dispose();
     codiceFiscale.dispose();
     parrocchia.dispose();
-    comune.dispose();
   }
 
   Future<void> _apriMaps(String indirizzo) async {
