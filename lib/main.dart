@@ -3,6 +3,8 @@ import 'dart:typed_data';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
@@ -4029,6 +4031,190 @@ class _ClientiScreenState extends State<ClientiScreen> {
     }
   }
 
+  Future<List<Map<String, dynamic>>> _cercaParrocchieOnline({
+    required String nome,
+    required String comune,
+  }) async {
+    final query = '$nome, $comune, Italia';
+    final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
+      'q': query,
+      'format': 'jsonv2',
+      'addressdetails': '1',
+      'limit': '10',
+      'countrycodes': 'it',
+      'accept-language': 'it',
+    });
+
+    final response = await http.get(uri, headers: {
+      'User-Agent': 'GestionePreventivi/1.1 (ricerca parrocchie)',
+      'Accept': 'application/json',
+    });
+
+    if (response.statusCode != 200) {
+      throw Exception('Servizio di ricerca non disponibile');
+    }
+
+    final decoded = jsonDecode(response.body);
+    if (decoded is! List) return [];
+
+    final risultati = <Map<String, dynamic>>[];
+    for (final item in decoded) {
+      if (item is! Map) continue;
+      final map = Map<String, dynamic>.from(item);
+      final type = (map['type'] ?? '').toString().toLowerCase();
+      final category = (map['category'] ?? '').toString().toLowerCase();
+      final display = (map['display_name'] ?? '').toString();
+      final isChurch = category == 'amenity' &&
+              (type == 'place_of_worship' || type == 'church') ||
+          display.toLowerCase().contains('parrocch');
+      if (!isChurch) continue;
+      risultati.add(map);
+    }
+    return risultati;
+  }
+
+  Future<void> _cercaParrocchiaOnline({
+    required TextEditingController nome,
+    required TextEditingController comune,
+    required TextEditingController indirizzo,
+    required TextEditingController telefono,
+    required TextEditingController parrocchia,
+  }) async {
+    final nomeRicerca = nome.text.trim().isNotEmpty
+        ? nome.text.trim()
+        : parrocchia.text.trim();
+    final comuneRicerca = comune.text.trim();
+
+    if (nomeRicerca.isEmpty || comuneRicerca.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Inserisci nome della parrocchia e comune.')),
+      );
+      return;
+    }
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const AlertDialog(
+        content: Row(
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(width: 18),
+            Expanded(child: Text('Cerco la parrocchia online...')),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      final risultati = await _cercaParrocchieOnline(
+        nome: nomeRicerca,
+        comune: comuneRicerca,
+      );
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+
+      if (!mounted) return;
+      if (risultati.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Nessuna parrocchia trovata. Prova con un nome più preciso.')),
+        );
+        return;
+      }
+
+      final scelta = await showDialog<Map<String, dynamic>>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Parrocchie trovate'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.separated(
+              shrinkWrap: true,
+              itemCount: risultati.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (_, i) {
+                final r = risultati[i];
+                final address = Map<String, dynamic>.from(
+                  (r['address'] as Map?) ?? <String, dynamic>{},
+                );
+                final comuneTrovato = (address['city'] ??
+                        address['town'] ??
+                        address['village'] ??
+                        address['municipality'] ??
+                        '')
+                    .toString();
+                final road = (address['road'] ?? '').toString();
+                final house = (address['house_number'] ?? '').toString();
+                final indirizzoTrovato = [
+                  if (road.isNotEmpty) road,
+                  if (house.isNotEmpty) house,
+                  if (comuneTrovato.isNotEmpty) comuneTrovato,
+                ].join(', ');
+                return ListTile(
+                  leading: const Icon(Icons.church_outlined),
+                  title: Text(
+                    (r['name'] ?? r['display_name'] ?? 'Parrocchia').toString(),
+                  ),
+                  subtitle: Text(
+                    indirizzoTrovato.isNotEmpty
+                        ? indirizzoTrovato
+                        : (r['display_name'] ?? '').toString(),
+                  ),
+                  onTap: () => Navigator.pop(ctx, r),
+                );
+              },
+            ),
+          ),
+        ),
+      );
+
+      if (scelta == null) return;
+      final address = Map<String, dynamic>.from(
+        (scelta['address'] as Map?) ?? <String, dynamic>{},
+      );
+      final nomeTrovato = (scelta['name'] ?? '').toString().trim();
+      final display = (scelta['display_name'] ?? '').toString();
+      final comuneTrovato = (address['city'] ??
+              address['town'] ??
+              address['village'] ??
+              address['municipality'] ??
+              '')
+          .toString();
+      final road = (address['road'] ?? '').toString();
+      final house = (address['house_number'] ?? '').toString();
+      final cap = (address['postcode'] ?? '').toString();
+      final provincia = (address['state'] ?? address['county'] ?? '').toString();
+      final phone = (address['phone'] ?? '').toString();
+      final indirizzoTrovato = [
+        if (road.isNotEmpty) road,
+        if (house.isNotEmpty) house,
+        if (cap.isNotEmpty) cap,
+        if (comuneTrovato.isNotEmpty) comuneTrovato,
+        if (provincia.isNotEmpty) provincia,
+      ].join(', ');
+
+      if (nomeTrovato.isNotEmpty) {
+        nome.text = nomeTrovato;
+        parrocchia.text = nomeTrovato;
+      } else if (display.isNotEmpty) {
+        parrocchia.text = display.split(',').first.trim();
+      }
+      comune.text = comuneTrovato.isNotEmpty ? comuneTrovato : comune.text;
+      indirizzo.text = indirizzoTrovato;
+      if (phone.isNotEmpty) telefono.text = phone;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Dati della parrocchia compilati. Controllali prima di salvare.')),
+      );
+    } catch (_) {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Non riesco a collegarmi al servizio online. Controlla la connessione.')),
+        );
+      }
+    }
+  }
+
   Future<void> _formCliente([Map<String, dynamic>? cliente]) async {
     final nome = TextEditingController(text: cliente?['nome'] ?? '');
     final telefono =
@@ -4042,6 +4228,7 @@ class _ClientiScreenState extends State<ClientiScreen> {
         TextEditingController(text: cliente?['codice_fiscale'] ?? '');
     final parrocchia =
         TextEditingController(text: cliente?['parrocchia'] ?? '');
+    final comune = TextEditingController();
     final key = GlobalKey<FormState>();
 
     await showModalBottomSheet(
@@ -4085,8 +4272,32 @@ class _ClientiScreenState extends State<ClientiScreen> {
                   controller: parrocchia,
                   textCapitalization: TextCapitalization.words,
                   decoration: const InputDecoration(
-                    labelText: 'Parrocchia',
+                    labelText: 'Parrocchia / Chiesa',
                     prefixIcon: Icon(Icons.church_outlined),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: comune,
+                  textCapitalization: TextCapitalization.words,
+                  decoration: const InputDecoration(
+                    labelText: 'Comune',
+                    prefixIcon: Icon(Icons.location_city_outlined),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => _cercaParrocchiaOnline(
+                      nome: nome,
+                      comune: comune,
+                      indirizzo: indirizzo,
+                      telefono: telefono,
+                      parrocchia: parrocchia,
+                    ),
+                    icon: const Icon(Icons.travel_explore),
+                    label: const Text('CERCA PARROCCHIA ONLINE'),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -4190,6 +4401,7 @@ class _ClientiScreenState extends State<ClientiScreen> {
     partitaIva.dispose();
     codiceFiscale.dispose();
     parrocchia.dispose();
+    comune.dispose();
   }
 
   Future<void> _apriMaps(String indirizzo) async {
