@@ -1148,6 +1148,7 @@ class PdfGenerator {
                 children: [
                   pw.Text('N. $numero', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
                   pw.Text('Data: $data'),
+                  pw.Text('marca da bollo assolta in originale'),
                 ],
               ),
             ],
