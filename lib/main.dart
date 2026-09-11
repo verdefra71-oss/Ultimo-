@@ -826,16 +826,16 @@ class PdfGenerator {
         ),
       ),
       pw.SizedBox(height: 5),
-      pw.Text(
-        cliente,
-        style: pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold),
-      ),
+      if (parrocchia.isNotEmpty) pw.Text('Parrocchia: $parrocchia'),
       if (indirizzo.isNotEmpty) pw.Text('Indirizzo: $indirizzo'),
       if (telefono.isNotEmpty) pw.Text('Telefono: $telefono'),
       if (email.isNotEmpty) pw.Text('Email: $email'),
       if (partitaIva.isNotEmpty) pw.Text('Partita IVA: $partitaIva'),
       if (codiceFiscale.isNotEmpty) pw.Text('Codice Fiscale: $codiceFiscale'),
-      if (parrocchia.isNotEmpty) pw.Text('Parrocchia: $parrocchia'),
+      pw.Text(
+        cliente,
+        style: pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold),
+      ),
     ];
 
     pdf.addPage(
@@ -1156,12 +1156,13 @@ class PdfGenerator {
           pw.SizedBox(height: 18),
           pw.Text('CLIENTE', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: gold)),
           pw.SizedBox(height: 4),
-          pw.Text(cliente, style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+          if (value('parrocchia').isNotEmpty) pw.Text('Parrocchia: ${value('parrocchia')}'),
           if (value('indirizzo').isNotEmpty) pw.Text('Indirizzo: ${value('indirizzo')}'),
           if (value('telefono').isNotEmpty) pw.Text('Telefono: ${value('telefono')}'),
           if (value('email').isNotEmpty) pw.Text('Email: ${value('email')}'),
           if (value('partita_iva').isNotEmpty) pw.Text('Partita IVA: ${value('partita_iva')}'),
           if (value('codice_fiscale').isNotEmpty) pw.Text('Codice Fiscale: ${value('codice_fiscale')}'),
+          pw.Text(cliente, style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
           pw.SizedBox(height: 20),
           pw.Table(
             border: pw.TableBorder.all(color: PdfColor.fromHex('#D8C98A')),
