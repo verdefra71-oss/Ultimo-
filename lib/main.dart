@@ -81,6 +81,18 @@ class PreventiviApp extends StatelessWidget {
       ),
       home: const DashboardScreen(),
     );
+
+            // Stato di pagamento del preventivo: mantenuto visibile anche sui preventivi esistenti.
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Pagato'),
+              value: pagato,
+              onChanged: (value) {
+                setState(() => pagato = value ?? false);
+              },
+              controlAffinity: ListTileControlAffinity.leading,
+            ),
+
   }
 }
 
@@ -199,7 +211,7 @@ class DatabaseHelper {
 
     return openDatabase(
       p.join(dbPath, fileName),
-      version: 12,
+      version: 11,
       onCreate: (db, version) async {
         await db.execute('''
 CREATE TABLE clienti (
@@ -323,11 +335,6 @@ CREATE TABLE fatture (
         if (oldVersion < 11) {
           await db.execute("ALTER TABLE preventivi ADD COLUMN pagato INTEGER NOT NULL DEFAULT 0");
         }
-        if (oldVersion < 12) {
-          // Normalizza i vecchi preventivi: garantisce che i campi usati
-          // dalla schermata Modifica siano sempre valorizzati.
-          await db.execute("UPDATE preventivi SET accettato = COALESCE(accettato, 0), pagato = COALESCE(pagato, 0), acconti = COALESCE(acconti, '[]')");
-        }
       },
     );
   }
@@ -346,8 +353,6 @@ CREATE TABLE fatture (
     final risultato = <Map<String, dynamic>>[];
 
     for (final p in preventivi) {
-      // Gli acconti/saldi riguardano esclusivamente preventivi accettati.
-      if ((p['accettato'] as num?)?.toInt() != 1) continue;
       if ((p['pagato'] as num?)?.toInt() == 1) continue;
 
       final totale = (p['totale'] as num?)?.toDouble() ?? 0;
@@ -385,8 +390,6 @@ CREATE TABLE fatture (
     final risultato = <Map<String, dynamic>>[];
 
     for (final p in preventivi) {
-      // Mostra gli acconti solo se il preventivo è stato accettato.
-      if ((p['accettato'] as num?)?.toInt() != 1) continue;
       try {
         final raw = jsonDecode((p['acconti'] ?? '[]').toString());
         if (raw is List) {
@@ -530,34 +533,6 @@ CREATE TABLE fatture (
     });
     await autoBackup();
     return id;
-  }
-
-  Future<int> updateFattura({
-    required int id,
-    required String numero,
-    required String cliente,
-    required List<Map<String, dynamic>> articoli,
-    required double ivaPercent,
-    required double totale,
-    required String pagamento,
-    String? iban,
-  }) async {
-    final result = await (await database).update(
-      'fatture',
-      {
-        'numero': numero,
-        'cliente': cliente,
-        'articoli': jsonEncode(articoli),
-        'iva_percent': ivaPercent,
-        'totale': totale,
-        'pagamento': pagamento,
-        'iban': iban,
-      },
-      where: 'id = ?',
-      whereArgs: [id],
-    );
-    await autoBackup();
-    return result;
   }
 
   Future<int> deleteFattura(int id) async {
@@ -826,16 +801,16 @@ class PdfGenerator {
         ),
       ),
       pw.SizedBox(height: 5),
-      if (parrocchia.isNotEmpty) pw.Text('Parrocchia: $parrocchia'),
+      pw.Text(
+        cliente,
+        style: pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold),
+      ),
       if (indirizzo.isNotEmpty) pw.Text('Indirizzo: $indirizzo'),
       if (telefono.isNotEmpty) pw.Text('Telefono: $telefono'),
       if (email.isNotEmpty) pw.Text('Email: $email'),
       if (partitaIva.isNotEmpty) pw.Text('Partita IVA: $partitaIva'),
       if (codiceFiscale.isNotEmpty) pw.Text('Codice Fiscale: $codiceFiscale'),
-      pw.Text(
-        cliente,
-        style: pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold),
-      ),
+      if (parrocchia.isNotEmpty) pw.Text('Parrocchia: $parrocchia'),
     ];
 
     pdf.addPage(
@@ -883,7 +858,8 @@ class PdfGenerator {
                     pw.SizedBox(height: 8),
                     pw.Text('N. $numero', style: const pw.TextStyle(fontSize: 11)),
                     pw.Text('Data: $data', style: const pw.TextStyle(fontSize: 11)),
-                  ],
+
+            pw.Text('Marca da bollo assolta in originale'),                  ],
                 ),
               ),
             ],
@@ -1134,7 +1110,7 @@ class PdfGenerator {
                     ),
                   pw.SizedBox(height: 6),
                   pw.Text(
-                    'FATTURA PRO-FORMA',
+                    'Fattura pro-forma',
                     style: pw.TextStyle(
                       fontSize: 20,
                       fontWeight: pw.FontWeight.bold,
@@ -1148,7 +1124,6 @@ class PdfGenerator {
                 children: [
                   pw.Text('N. $numero', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
                   pw.Text('Data: $data'),
-                  pw.Text('marca da bollo assolta in originale'),
                 ],
               ),
             ],
@@ -1156,13 +1131,12 @@ class PdfGenerator {
           pw.SizedBox(height: 18),
           pw.Text('CLIENTE', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: gold)),
           pw.SizedBox(height: 4),
-          if (value('parrocchia').isNotEmpty) pw.Text('Parrocchia: ${value('parrocchia')}'),
+          pw.Text(cliente, style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
           if (value('indirizzo').isNotEmpty) pw.Text('Indirizzo: ${value('indirizzo')}'),
           if (value('telefono').isNotEmpty) pw.Text('Telefono: ${value('telefono')}'),
           if (value('email').isNotEmpty) pw.Text('Email: ${value('email')}'),
           if (value('partita_iva').isNotEmpty) pw.Text('Partita IVA: ${value('partita_iva')}'),
           if (value('codice_fiscale').isNotEmpty) pw.Text('Codice Fiscale: ${value('codice_fiscale')}'),
-          pw.Text(cliente, style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
           pw.SizedBox(height: 20),
           pw.Table(
             border: pw.TableBorder.all(color: PdfColor.fromHex('#D8C98A')),
@@ -1195,10 +1169,14 @@ class PdfGenerator {
               children: [
                 pw.Text('DATI AZIENDA', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: gold)),
                 pw.SizedBox(height: 4),
-                pw.Text('di CARPENTIERI ALFONSO', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-                pw.Text('Sede legale: via Ugo Pirro, 9 - 84100 Salerno'),
-                pw.Text('Cell. 328 697 2865'),
-                pw.Text('P. IVA 06051430657'),
+                pw.Text('Verde Emanuele', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                pw.Text('via Mario Francesco Pagano 8'),
+                pw.Text('80022 Arzano - NA'),
+                pw.Text('C.F. VRDMNL76H22F839Q'),
+                pw.Text('P.IVA 06089401217'),
+                pw.Text('Cel: 3331798874'),
+                pw.Text('verdeemanuele@gmail.com'),
+                pw.Text('PEC: verdeemanuele@pec.it'),
               ],
             ),
           ),
@@ -1210,10 +1188,10 @@ class PdfGenerator {
               crossAxisAlignment: pw.CrossAxisAlignment.start,
               children: [
                 pw.Text('Metodo di pagamento: $pagamento', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-                if (pagamento == 'Bonifico')
+                if (pagamento == 'Bonifico' && (iban ?? '').trim().isNotEmpty)
                   pw.Padding(
                     padding: const pw.EdgeInsets.only(top: 4),
-                    child: pw.Text('IBAN: ${((iban ?? '').trim().isEmpty ? 'IT28F0538715206000003630167' : iban!.trim())}'),
+                    child: pw.Text('IBAN: ${iban!.trim()}'),
                   ),
               ],
             ),
@@ -1224,7 +1202,7 @@ class PdfGenerator {
 
     await Printing.sharePdf(
       bytes: await pdf.save(),
-      filename: 'Fattura_Pro-Forma_$numero.pdf',
+      filename: 'Fattura_$numero.pdf',
     );
   }
 
@@ -1232,9 +1210,8 @@ class PdfGenerator {
 
 class CreaFatturaScreen extends StatefulWidget {
   final Map<String, dynamic>? preventivo;
-  final Map<String, dynamic>? fattura;
 
-  const CreaFatturaScreen({super.key, this.preventivo, this.fattura});
+  const CreaFatturaScreen({super.key, this.preventivo});
 
   @override
   State<CreaFatturaScreen> createState() => _CreaFatturaScreenState();
@@ -1257,16 +1234,14 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
   }
 
   Future<void> _precompila() async {
-    final f = widget.fattura;
-    if (f != null) {
-      _numero.text = (f['numero'] ?? '').toString();
-      cliente = (f['cliente'] ?? '').toString();
+    _numero.text = await DatabaseHelper.instance.prossimoNumeroFattura();
+    final p = widget.preventivo;
+    if (p != null) {
+      cliente = (p['cliente'] ?? '').toString();
       _cliente.text = cliente ?? '';
-      _iva.text = ((f['iva_percent'] as num?)?.toDouble() ?? 0).toString();
-      pagamento = (f['pagamento'] ?? 'Contanti').toString();
-      _iban.text = (f['iban'] ?? '').toString();
+      _iva.text = ((p['iva_percent'] as num?)?.toDouble() ?? 0).toString();
       try {
-        final raw = jsonDecode((f['articoli'] ?? '[]').toString());
+        final raw = jsonDecode((p['articoli'] ?? '[]').toString());
         if (raw is List) {
           articoli.addAll(raw.map((e) => {
             'nome': (e['nome'] ?? '').toString(),
@@ -1275,24 +1250,6 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
           }));
         }
       } catch (_) {}
-    } else {
-      _numero.text = await DatabaseHelper.instance.prossimoNumeroFattura();
-      final p = widget.preventivo;
-      if (p != null) {
-        cliente = (p['cliente'] ?? '').toString();
-        _cliente.text = cliente ?? '';
-        _iva.text = ((p['iva_percent'] as num?)?.toDouble() ?? 0).toString();
-        try {
-          final raw = jsonDecode((p['articoli'] ?? '[]').toString());
-          if (raw is List) {
-            articoli.addAll(raw.map((e) => {
-              'nome': (e['nome'] ?? '').toString(),
-              'prezzo': (e['prezzo'] as num?)?.toDouble() ?? 0,
-              'quantita': (e['quantita'] as num?)?.toDouble() ?? 1,
-            }));
-          }
-        } catch (_) {}
-      }
     }
     if (mounted) setState(() {});
   }
@@ -1383,41 +1340,26 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
     setState(() => salvando = true);
     try {
       final numero = _numero.text.trim();
-      if (widget.fattura != null) {
-        await DatabaseHelper.instance.updateFattura(
-          id: (widget.fattura!['id'] as num).toInt(),
-          numero: numero,
-          cliente: cliente!,
-          articoli: articoli,
-          ivaPercent: ivaPercent,
-          totale: totale,
-          pagamento: pagamento,
-          iban: pagamento == 'Bonifico' ? _iban.text.trim() : null,
-        );
-      } else {
-        await DatabaseHelper.instance.insertFattura(
-          numero: numero,
-          cliente: cliente!,
-          articoli: articoli,
-          ivaPercent: ivaPercent,
-          totale: totale,
-          pagamento: pagamento,
-          iban: pagamento == 'Bonifico' ? _iban.text.trim() : null,
-        );
-      }
+      await DatabaseHelper.instance.insertFattura(
+        numero: numero,
+        cliente: cliente!,
+        articoli: articoli,
+        ivaPercent: ivaPercent,
+        totale: totale,
+        pagamento: pagamento,
+        iban: pagamento == 'Bonifico' ? _iban.text.trim() : null,
+      );
       await PdfGenerator.generaECondividiFattura(
         numero: numero,
         cliente: cliente!,
         articoli: articoli,
         ivaPercent: ivaPercent,
         pagamento: pagamento,
-        iban: pagamento == 'Bonifico'
-            ? (_iban.text.trim().isEmpty ? 'IT28F0538715206000003630167' : _iban.text.trim())
-            : null,
+        iban: pagamento == 'Bonifico' ? _iban.text.trim() : null,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(widget.fattura != null ? 'Fattura modificata e PDF pronto per la condivisione.' : 'Fattura salvata e PDF pronto per la condivisione.')),
+        const SnackBar(content: Text('Fattura salvata e PDF pronto per la condivisione.')),
       );
       Navigator.pop(context);
     } catch (e) {
@@ -1446,7 +1388,7 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
     const darkGold = Color(0xFF9A7000);
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.fattura != null ? 'Modifica fattura' : (widget.preventivo == null ? 'Crea fattura' : 'Fattura da preventivo')),
+        title: Text(widget.preventivo == null ? 'Crea fattura' : 'Fattura da preventivo'),
         actions: [
           IconButton(
             tooltip: 'Salva fattura',
@@ -1575,12 +1517,7 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
                       DropdownMenuItem(value: 'Contanti', child: Text('Contanti')),
                       DropdownMenuItem(value: 'Bonifico', child: Text('Bonifico')),
                     ],
-                    onChanged: (v) => setState(() {
-                      pagamento = v ?? 'Contanti';
-                      if (pagamento == 'Bonifico' && _iban.text.trim().isEmpty) {
-                        _iban.text = 'IT28F0538715206000003630167';
-                      }
-                    }),
+                    onChanged: (v) => setState(() => pagamento = v ?? 'Contanti'),
                   ),
                   if (pagamento == 'Bonifico') ...[
                     const SizedBox(height: 12),
@@ -1631,7 +1568,7 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
             icon: salvando
                 ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.receipt_long_rounded),
-            label: Text(widget.fattura != null ? 'SALVA MODIFICHE E PDF' : 'CREA FATTURA E PDF'),
+            label: const Text('CREA Fattura pro-forma E PDF'),
           ),
         ],
       ),
@@ -1750,21 +1687,6 @@ class _ListaFattureScreenState extends State<ListaFattureScreen> {
               ],
               const SizedBox(height: 8),
               Row(children: [
-                Expanded(child: OutlinedButton.icon(
-                  onPressed: () async {
-                    Navigator.pop(ctx);
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => CreaFatturaScreen(fattura: f),
-                      ),
-                    );
-                    await _carica();
-                  },
-                  icon: const Icon(Icons.edit_outlined),
-                  label: const Text('MODIFICA'),
-                )),
-                const SizedBox(width: 10),
                 Expanded(child: FilledButton.icon(
                   onPressed: () async {
                     await PdfGenerator.generaECondividiFattura(
@@ -2304,7 +2226,6 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
   final List<Map<String, dynamic>> acconti = [];
   double ivaPercent = 22;
   bool accettato = false;
-  bool pagato = false;
   bool busy = false;
 
   double get imponibile => articoli.fold<double>(
@@ -2534,15 +2455,15 @@ Future<void> aggiungiAcconto() async {
       final db = DatabaseHelper.instance;
       final numero = await db.prossimoNumeroPreventivo();
 
-      // Se l'utente seleziona "Pagato", il preventivo viene considerato
-      // saldato indipendentemente dagli eventuali acconti inseriti.
-      // Gli acconti restano comunque salvati come storico.
+      // Se gli acconti coprono interamente il totale, il preventivo è PAGATO.
+      // Gli acconti restano salvati e visibili come storico dei pagamenti.
       final accontiDaSalvare = List<Map<String, dynamic>>.from(acconti);
       final totaleAcconti = accontiDaSalvare.fold<double>(
         0,
         (sum, a) => sum + ((a['importo'] as num?)?.toDouble() ?? 0),
       );
-      final pagatoEffettivo = pagato || (totale - totaleAcconti <= 0.005);
+      final pagato = totale - totaleAcconti <= 0.005;
+      // Non cancellare gli acconti: devono rimanere nello storico e nel PDF.
 
       final id = await db.insertPreventivo(
         numero: numero,
@@ -2553,7 +2474,7 @@ Future<void> aggiungiAcconto() async {
         accettato: accettato,
         acconti: accontiDaSalvare,
         scontoPercent: scontoPercent,
-        pagato: pagatoEffettivo,
+        pagato: pagato,
       );
 
       final clienti = await db.getClienti();
@@ -2574,7 +2495,7 @@ Future<void> aggiungiAcconto() async {
         accettato: accettato,
         acconti: acconti,
         scontoPercent: scontoPercent,
-        pagato: pagatoEffettivo,
+        pagato: pagato,
       );
 
       if (mounted) {
@@ -2811,7 +2732,7 @@ Future<void> aggiungiAcconto() async {
                           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                         ),
                         OutlinedButton.icon(
-                          onPressed: pagato ? null : aggiungiAcconto,
+                          onPressed: aggiungiAcconto,
                           icon: const Icon(Icons.add),
                           label: const Text('AGGIUNGI'),
                         ),
@@ -2869,22 +2790,6 @@ Future<void> aggiungiAcconto() async {
                     ],
                   ],
                 ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Card(
-              child: CheckboxListTile(
-                value: pagato,
-                onChanged: (v) => setState(() => pagato = v ?? false),
-                title: const Text(
-                  'Pagato',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-                subtitle: const Text(
-                  'Considera il preventivo completamente pagato e bypassa il calcolo degli acconti.',
-                ),
-                secondary: const Icon(Icons.paid_outlined),
-                controlAffinity: ListTileControlAffinity.leading,
               ),
             ),
             const SizedBox(height: 12),
@@ -3109,7 +3014,7 @@ class _ListaPreventiviScreenState extends State<ListaPreventiviScreen> {
                     );
                   },
                   icon: const Icon(Icons.receipt_long_rounded),
-                  label: const Text('CREA FATTURA DA PREVENTIVO'),
+                  label: const Text('CREA Fattura pro-forma DA PREVENTIVO'),
                 ),
               ),
               const SizedBox(height: 10),
@@ -3376,7 +3281,6 @@ class _ModificaPreventivoScreenState
   late List<Map<String, dynamic>> acconti;
   late double ivaPercent;
   late bool accettato;
-  late bool pagato;
 
   bool busy = false;
 
@@ -3621,7 +3525,6 @@ Future<void> aggiungiAcconto() async {
     ivaPercent =
         (widget.preventivo['iva_percent'] as num?)?.toDouble() ?? 0;
     accettato = (widget.preventivo['accettato'] as num?)?.toInt() == 1;
-    pagato = (widget.preventivo['pagato'] as num?)?.toInt() == 1;
 
     try {
       final raw = jsonDecode(
@@ -3697,14 +3600,12 @@ Future<void> aggiungiAcconto() async {
       final preventivoId =
           (widget.preventivo['id'] as num).toInt();
 
-      // "Pagato" bypassa il calcolo degli acconti: il preventivo viene
-      // considerato saldato anche se il totale degli acconti è inferiore.
-      // Gli eventuali acconti restano comunque nello storico.
+      // Se il saldo è stato azzerato, mantieni gli acconti come storico.
       final totaleAcconti = acconti.fold<double>(
         0,
         (sum, a) => sum + ((a['importo'] as num?)?.toDouble() ?? 0),
       );
-      final pagatoEffettivo = pagato || (totale - totaleAcconti <= 0.005);
+      final pagato = totale - totaleAcconti <= 0.005;
       final updated = await db.updatePreventivo(
         id: preventivoId,
         cliente: cliente,
@@ -3714,7 +3615,7 @@ Future<void> aggiungiAcconto() async {
         accettato: accettato,
         acconti: acconti,
         scontoPercent: scontoPercent,
-        pagato: pagatoEffettivo,
+        pagato: pagato,
       );
 
       if (updated == 0) {
@@ -3729,7 +3630,7 @@ Future<void> aggiungiAcconto() async {
         accettato: accettato,
         acconti: acconti,
         scontoPercent: scontoPercent,
-        pagato: pagatoEffettivo,
+        pagato: pagato,
       );
 
       if (mounted) {
@@ -3959,7 +3860,7 @@ Future<void> aggiungiAcconto() async {
                       children: [
                         const Text('Acconti', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
                         OutlinedButton.icon(
-                          onPressed: pagato ? null : aggiungiAcconto,
+                          onPressed: aggiungiAcconto,
                           icon: const Icon(Icons.add),
                           label: const Text('AGGIUNGI'),
                         ),
@@ -4015,24 +3916,6 @@ Future<void> aggiungiAcconto() async {
                     ],
                   ],
                 ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            // Questo controllo deve restare visibile anche sui vecchi preventivi
-            // già generati: lo stato viene letto dal campo pagato del database.
-            Card(
-              child: CheckboxListTile(
-                value: pagato,
-                onChanged: (v) => setState(() => pagato = v ?? false),
-                title: const Text(
-                  'Pagato',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-                subtitle: const Text(
-                  'Considera il preventivo completamente pagato e bypassa il calcolo degli acconti.',
-                ),
-                secondary: const Icon(Icons.paid_outlined),
-                controlAffinity: ListTileControlAffinity.leading,
               ),
             ),
             const SizedBox(height: 12),
