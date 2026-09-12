@@ -82,16 +82,6 @@ class PreventiviApp extends StatelessWidget {
       home: const DashboardScreen(),
     );
 
-            // Stato di pagamento del preventivo: mantenuto visibile anche sui preventivi esistenti.
-            CheckboxListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Pagato'),
-              value: pagato,
-              onChanged: (value) {
-                setState(() => pagato = value ?? false);
-              },
-              controlAffinity: ListTileControlAffinity.leading,
-            ),
 
   }
 }
@@ -859,7 +849,7 @@ class PdfGenerator {
                     pw.Text('N. $numero', style: const pw.TextStyle(fontSize: 11)),
                     pw.Text('Data: $data', style: const pw.TextStyle(fontSize: 11)),
 
-            pw.Text('Marca da bollo assolta in originale'),                  ],
+                  ],
                 ),
               ),
             ],
@@ -1124,6 +1114,7 @@ class PdfGenerator {
                 children: [
                   pw.Text('N. $numero', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
                   pw.Text('Data: $data'),
+                  pw.Text('Marca da bollo assolta in originale'),
                 ],
               ),
             ],
@@ -1568,7 +1559,7 @@ class _CreaFatturaScreenState extends State<CreaFatturaScreen> {
             icon: salvando
                 ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.receipt_long_rounded),
-            label: const Text('CREA Fattura pro-forma E PDF'),
+            label: const Text('CREA FATTURA E PDF'),
           ),
         ],
       ),
@@ -2226,6 +2217,7 @@ class _NuovoPreventivoScreenState extends State<NuovoPreventivoScreen> {
   final List<Map<String, dynamic>> acconti = [];
   double ivaPercent = 22;
   bool accettato = false;
+  bool pagato = false;
   bool busy = false;
 
   double get imponibile => articoli.fold<double>(
@@ -2462,7 +2454,7 @@ Future<void> aggiungiAcconto() async {
         0,
         (sum, a) => sum + ((a['importo'] as num?)?.toDouble() ?? 0),
       );
-      final pagato = totale - totaleAcconti <= 0.005;
+      final pagatoFinale = pagato || (totale - totaleAcconti <= 0.005);
       // Non cancellare gli acconti: devono rimanere nello storico e nel PDF.
 
       final id = await db.insertPreventivo(
@@ -2474,7 +2466,7 @@ Future<void> aggiungiAcconto() async {
         accettato: accettato,
         acconti: accontiDaSalvare,
         scontoPercent: scontoPercent,
-        pagato: pagato,
+        pagato: pagatoFinale,
       );
 
       final clienti = await db.getClienti();
@@ -2495,7 +2487,7 @@ Future<void> aggiungiAcconto() async {
         accettato: accettato,
         acconti: acconti,
         scontoPercent: scontoPercent,
-        pagato: pagato,
+        pagato: pagatoFinale,
       );
 
       if (mounted) {
@@ -2795,6 +2787,17 @@ Future<void> aggiungiAcconto() async {
             const SizedBox(height: 12),
             Card(
               child: CheckboxListTile(
+                value: pagato,
+                onChanged: (v) => setState(() => pagato = v ?? false),
+                title: const Text(
+                  'Pagato',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+            ),
+            Card(
+              child: CheckboxListTile(
                 value: accettato,
                 onChanged: (v) => setState(() => accettato = v ?? false),
                 title: const Text(
@@ -3014,7 +3017,7 @@ class _ListaPreventiviScreenState extends State<ListaPreventiviScreen> {
                     );
                   },
                   icon: const Icon(Icons.receipt_long_rounded),
-                  label: const Text('CREA Fattura pro-forma DA PREVENTIVO'),
+                  label: const Text('CREA FATTURA DA PREVENTIVO'),
                 ),
               ),
               const SizedBox(height: 10),
@@ -3281,6 +3284,7 @@ class _ModificaPreventivoScreenState
   late List<Map<String, dynamic>> acconti;
   late double ivaPercent;
   late bool accettato;
+  late bool pagato;
 
   bool busy = false;
 
@@ -3525,6 +3529,7 @@ Future<void> aggiungiAcconto() async {
     ivaPercent =
         (widget.preventivo['iva_percent'] as num?)?.toDouble() ?? 0;
     accettato = (widget.preventivo['accettato'] as num?)?.toInt() == 1;
+    pagato = (widget.preventivo['pagato'] as num?)?.toInt() == 1;
 
     try {
       final raw = jsonDecode(
@@ -3605,7 +3610,7 @@ Future<void> aggiungiAcconto() async {
         0,
         (sum, a) => sum + ((a['importo'] as num?)?.toDouble() ?? 0),
       );
-      final pagato = totale - totaleAcconti <= 0.005;
+      final pagatoFinale = pagato || (totale - totaleAcconti <= 0.005);
       final updated = await db.updatePreventivo(
         id: preventivoId,
         cliente: cliente,
@@ -3615,7 +3620,7 @@ Future<void> aggiungiAcconto() async {
         accettato: accettato,
         acconti: acconti,
         scontoPercent: scontoPercent,
-        pagato: pagato,
+        pagato: pagatoFinale,
       );
 
       if (updated == 0) {
@@ -3630,7 +3635,7 @@ Future<void> aggiungiAcconto() async {
         accettato: accettato,
         acconti: acconti,
         scontoPercent: scontoPercent,
-        pagato: pagato,
+        pagato: pagatoFinale,
       );
 
       if (mounted) {
@@ -3919,6 +3924,18 @@ Future<void> aggiungiAcconto() async {
               ),
             ),
             const SizedBox(height: 12),
+            const SizedBox(height: 12),
+            Card(
+              child: CheckboxListTile(
+                value: pagato,
+                onChanged: (v) => setState(() => pagato = v ?? false),
+                title: const Text(
+                  'Pagato',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+            ),
             Card(
               child: CheckboxListTile(
                 value: accettato,
@@ -4914,6 +4931,7 @@ class _BackupScreenState extends State<BackupScreen> {
           ],
           if (lastMessage != null) ...[
             const SizedBox(height: 20),
+            const SizedBox(height: 16),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(14),
